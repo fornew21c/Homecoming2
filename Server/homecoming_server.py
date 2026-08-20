@@ -1540,6 +1540,26 @@ def route_remaining(legs, progress):
     return int(remaining)
 
 
+def widen_total(session, straight):
+    """전체거리를 남은거리보다 작지 않게 넓힌다. 넓혔으면 갱신된 행을 돌려준다.
+
+    경로 없는 귀가의 전체거리는 출발 시점의 직선거리다. 집 반대쪽으로 먼저 가는
+    길이면(주차장·역까지 걸어 나가는 방향) 남은거리가 그 값을 넘어서고, 그러면
+    진행 바가 0 에 붙어 아무리 가도 안 움직인다 — 2026-08-20 실주행 로그에서
+    남은거리가 5,813m → 6,721m 로 늘어나는 것을 봤다.
+
+    **줄이지는 않는다.** 가까워질 때마다 분모가 따라 줄면 진행률이 늘 같은 자리에
+    머문다. 앱도 같은 규칙이다(`HomecomingActivityManager.update` 의
+    `max(previous.totalMeters, meters)`).
+    """
+    if session["total_meters"] >= int(straight):
+        return session
+    db().execute("UPDATE sessions SET total_meters = ? WHERE id = ?",
+                 (int(straight), session["id"]))
+    db().commit()
+    return db().execute("SELECT * FROM sessions WHERE id = ?", (session["id"],)).fetchone()
+
+
 def route_travelled(session):
     """경로 위에서 여기까지 온 거리(m). 경로 없이 시작한 귀가면 None.
 
@@ -2586,12 +2606,15 @@ class Handler(BaseHTTPRequestHandler):
         previous_stage = session["stage"]
 
         # 첫 위치는 전체 거리의 기준이 된다.
-        if session["total_meters"] == 0:
-            straight = haversine(lat, lon, session["home_lat"], session["home_lon"])
-            db().execute("UPDATE sessions SET total_meters = ? WHERE id = ?",
-                         (int(straight), session_id))
-            db().commit()
-            session = db().execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        #
+        # **그리고 그보다 멀어지면 기준을 넓힌다.** 경로 없는 귀가의 전체거리는 출발
+        # 시점의 직선거리라, 집 반대쪽으로 먼저 가는 길(주차장·역까지 걸어 나가는 방향)
+        # 에서는 남은거리가 전체거리를 넘어선다. 그러면 진행 바가 0 에 붙어 아무리
+        # 가도 안 움직인다 — 2026-08-20 실주행에서 남은거리가 5,813m → 6,721m 로
+        # 늘어나는 것을 로그로 봤다. 앱도 같은 규칙을 쓴다
+        # (`HomecomingActivityManager.update` 의 `max(previous.totalMeters, meters)`).
+        session = widen_total(
+            session, haversine(lat, lon, session["home_lat"], session["home_lon"]))
 
         session = recompute(session, lat, lon, at)
 

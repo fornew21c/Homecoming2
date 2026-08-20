@@ -757,14 +757,28 @@ final class HomecomingCoordinator {
             let estimate = await self.estimateOrFallback(from: location.coordinate, to: home.coordinate)
             guard !Task.isCancelled else { return }
 
-            self.lastEstimate = estimate
+            // **거리는 직선으로 되돌린다.** 위 `startingEstimate` 와 같은 이유다 —
+            // 경로가 없는 귀가에서 서버는 직선으로 재므로, 추정이 준 거리(직선×1.35
+            // 또는 자동차 경로)를 그대로 밀면 앱과 서버가 같은 필드를 서로 다른 자로
+            // 번갈아 덮어쓴다. 도착예정·수단·문구는 추정이 준 것을 그대로 쓴다.
+            let straight = Int(location.distance(from: home.location))
+            let corrected = ETAEstimate(
+                expectedArrival: estimate.expectedArrival,
+                routeMeters: straight,
+                transport: estimate.transport,
+                detail: estimate.detail,
+                source: estimate.source,
+                routeShape: estimate.routeShape
+            )
+
+            self.lastEstimate = corrected
             self.lastETARefresh = Date()
             self.lastETAOrigin = location
-            self.remainingMeters = estimate.routeMeters
+            self.remainingMeters = corrected.routeMeters
             self.publishedArrival = nil   // 기준선이 바뀌었으니 흔들림 억제를 푼다
             self.refreshTask = nil
 
-            self.pushUpdate(remainingMeters: estimate.routeMeters, home: home)
+            self.pushUpdate(remainingMeters: corrected.routeMeters, home: home)
         }
     }
 
@@ -786,11 +800,29 @@ final class HomecomingCoordinator {
         else {
             // 경로가 없다. **귀가자가 적은 시간이 있으면 그것을 쓴다** — 추정보다
             // 사람이 아는 값이 낫다(`ETAEstimate.Source.traveler` 주석 참고).
-            // 거리는 직선으로 둔다. 어느 길로 갈지 모르니 그게 정직한 값이다.
-            guard let minutes = plannedMinutes, minutes > 0 else { return fallback }
+            //
+            // **거리는 언제나 직선이다.** 서버가 경로 없는 귀가를 그렇게 재기
+            // 때문이다(`recompute` 의 `straight`). 추정이 준 거리를 그대로 쓰면
+            // 같은 필드에 두 개의 자가 섞인다 — `/eta` 는 직선×1.35 를 주고
+            // (`handle_eta`), MapKit 은 자동차 경로 거리를 준다. 둘 다 직선보다
+            // 커서 카드에 **직선거리로는 나올 수 없는 값**이 뜨고, 서버 갱신이
+            // 닿는 순간 확 줄어든다(2026-08-21 실기기에서 그렇게 보였다).
+            //
+            // 경로가 있는 쪽은 이미 같은 규칙을 지킨다(아래 `along`) — "앱도 서버와
+            // 같은 자로 재야 첫 갱신에서 튀지 않는다".
+            let straight = Int(home.location.distance(from: origin))
+            guard let minutes = plannedMinutes, minutes > 0 else {
+                return ETAEstimate(
+                    expectedArrival: fallback.expectedArrival,
+                    routeMeters: straight,
+                    transport: fallback.transport,
+                    detail: fallback.detail,
+                    source: fallback.source
+                )
+            }
             return ETAEstimate(
                 expectedArrival: Date().addingTimeInterval(TimeInterval(minutes * 60)),
-                routeMeters: Int(home.location.distance(from: origin)),
+                routeMeters: straight,
                 transport: fallback.transport,
                 detail: nil,
                 source: .traveler

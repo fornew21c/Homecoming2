@@ -268,3 +268,45 @@ class PlannedMinutes(unittest.TestCase):
         # 짐작한 값이라 60분과 같을 이유가 없다. 여기서 보는 것은 "덮어쓴다" 는 것뿐이다.
         planned = started + timedelta(minutes=60)
         self.assertGreater(abs((hs.parse_iso(row["expected_arrival"]) - planned).total_seconds()), 60)
+
+
+
+class TotalMetersWidens(unittest.TestCase):
+    """전체거리는 남은거리보다 작아지지 않는다 (`widen_total`).
+
+    진행 바의 분모다. 출발 시점 직선거리로 박아 두면, 집 반대쪽으로 먼저 가는 길에서
+    남은거리가 분모를 넘어서고 바가 0 에 붙는다 — 2026-08-20 실주행 로그에서 남은거리가
+    5,813m → 6,721m 로 늘어나는 것을 봤다.
+    """
+
+    def setUp(self):
+        for table in ("sessions", "routes", "fixes", "activities"):
+            hs.db().execute(f"DELETE FROM {table}")
+        hs.db().commit()
+        started = hs.now()
+        hs.db().execute(
+            """INSERT INTO sessions (id, traveler, traveler_name, home_lat, home_lon,
+               home_radius, home_name, total_meters, remaining_meters, stage, transport,
+               expected_arrival, started_at, measured_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("s1", "acct", "아빠", HOME[0], HOME[1], 150, "집", 0, 0, "leaving", "walk",
+             hs.iso(started), hs.iso(started), hs.iso(started)))
+        hs.db().commit()
+
+    def session(self):
+        return hs.db().execute("SELECT * FROM sessions WHERE id = 's1'").fetchone()
+
+    def test_첫_위치가_전체거리를_정한다(self):
+        row = hs.widen_total(self.session(), 3000.4)
+        self.assertEqual(row["total_meters"], 3000)
+
+    def test_멀어지면_전체거리도_넓어진다(self):
+        hs.widen_total(self.session(), 3000)
+        row = hs.widen_total(self.session(), 6721)
+        self.assertEqual(row["total_meters"], 6721)
+
+    def test_가까워져도_줄지_않는다(self):
+        hs.widen_total(self.session(), 6721)
+        row = hs.widen_total(self.session(), 1000)
+        self.assertEqual(row["total_meters"], 6721,
+                         "분모가 따라 줄면 진행률이 늘 같은 자리에 머문다")
