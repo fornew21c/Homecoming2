@@ -1,0 +1,547 @@
+import CoreLocation
+import SwiftUI
+
+/// 귀가 경로를 폰에서 만든다.
+///
+/// **넣는 것은 두 가지뿐이다** — 어디서 어디까지, 그리고 몇 분.
+/// 좌표열은 `RouteTracer` 가 채우고, 도착예정은 여기 적은 분에서 나온다.
+///
+/// 분을 사용자가 넣는 이유 — 대중교통 앱이 이미 알고 있다. "1시간 24분" 이라고
+/// 화면에 떠 있다. 그걸 옮겨 적는 게 위치로 예측하는 것보다 훨씬 정확하다.
+/// 실제로 같은 경로에서 위치로 예측했을 때 도착예정이 18.8시간까지 튀었다.
+struct RouteEditor: View {
+
+    let store: RouteStore
+    /// 경로의 끝. 집은 이미 정해져 있으니 다시 묻지 않는다.
+    let home: HomePlace
+    /// 출발지. 회사에서 출발하니 대개 지금 있는 자리다.
+    let origin: CLLocationCoordinate2D?
+
+    /// 고칠 경로. nil 이면 새로 만든다.
+    ///
+    /// **고치는 것과 만드는 것은 같은 화면이다.** 넣는 값이 똑같기 때문이다.
+    /// 다른 건 시작할 때 값이 채워져 있는지와, 저장할 때 id 를 함께 보내는지뿐이다.
+    var editing: RouteDetail?
+
+    /// 저장에 성공하면 그 경로 id 를 준다. 부른 쪽이 바로 고를 수 있게.
+    var onSaved: (String) -> Void
+    /// 지웠을 때. 고르기 화면이 선택을 놓아야 한다.
+    var onDeleted: (() -> Void)?
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var steps: [RouteTracer.Step] = [
+        .init(mode: .walk, minutes: 5),
+        .init(mode: .bus, minutes: 15),
+    ]
+    @State private var originCoordinate: CLLocationCoordinate2D?
+    @State private var originName = ""
+    @State private var isSaving = false
+    @State private var failure: String?
+    @State private var confirmingDelete = false
+
+    private let accent = Color(red: 0.42, green: 0.85, blue: 0.62)
+
+    /// 전체 소요시간. 구간 시간의 합이다.
+    private var totalMinutes: Int { steps.reduce(0) { $0 + max(1, $1.minutes) } }
+
+    /// 마지막 구간의 도착지는 집이다. 좌표를 따로 묻지 않는다.
+    /// 이 구간의 지도를 열 자리 — **직전에 찍어 둔 지점**.
+    ///
+    /// 앞쪽 구간 중 좌표가 있는 마지막 것을 쓴다. 대기 구간은 좌표가 없어서
+    /// 건너뛴다. 아직 아무것도 안 찍었으면 출발지, 그것도 없으면 집이다.
+    private func startPoint(before index: Int) -> CLLocationCoordinate2D {
+        for step in steps[..<index].reversed() {
+            if let to = step.to { return to }
+        }
+        return originCoordinate ?? origin ?? home.coordinate
+    }
+
+    private var resolvedSteps: [RouteTracer.Step] {
+        guard var last = steps.last else { return steps }
+        last.to = home.coordinate
+        last.toName = last.toName.isEmpty ? home.name : last.toName
+        return steps.dropLast() + [last]
+    }
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && originCoordinate != nil
+            && steps.count >= 1
+            // 마지막을 뺀 이동 구간은 좌표가 있어야 한다. 마지막은 집이 채운다.
+            && steps.dropLast().allSatisfy { !$0.mode.moves || $0.to != nil }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    nameField
+                    originField
+                    stepList
+                    summary
+                    if editing != nil { deleteButton }
+                    if let failure {
+                        Text(failure)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(20)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle(editing == nil ? "경로 만들기" : "경로 고치기")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSaving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("저장") { Task { await save() } }
+                            .disabled(!canSave)
+                    }
+                }
+            }
+            .task {
+                if let editing {
+                    // 고치는 것이면 저장된 값으로 채운다.
+                    name = editing.name
+                    steps = editing.steps
+                    originCoordinate = editing.origin
+                    originName = editing.origin == nil ? "" : "저장된 출발지"
+                    return
+                }
+                // 출발지는 대개 지금 있는 자리다. 미리 채워 두고 바꿀 수 있게 한다.
+                if originCoordinate == nil, let origin {
+                    originCoordinate = origin
+                    originName = "현재 위치"
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    // MARK: - 조각
+
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            label("이름")
+            TextField("회사-집", text: $name)
+                .textFieldStyle(.plain)
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.06)))
+                .foregroundStyle(.white)
+            // 같은 이름으로 다시 저장하면 고치는 것이다. 사용자가 알아야 한다.
+            Text("같은 이름으로 저장하면 그 경로를 고칩니다.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.35))
+        }
+    }
+
+    private var originField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            label("출발")
+            PlacePicker(
+                title: originName.isEmpty ? "출발지를 찾으세요" : originName,
+                near: origin ?? home.coordinate,
+                store: store
+            ) { hit in
+                originCoordinate = hit.coordinate
+                originName = hit.name
+            }
+        }
+    }
+
+    private var stepList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                label("구간")
+                Spacer()
+                Button {
+                    steps.append(.init(mode: .bus, minutes: 10))
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(accent)
+                }
+            }
+
+            ForEach(steps.indices, id: \.self) { index in
+                StepRow(
+                    step: $steps[index],
+                    // **이전 지점에서 지도를 연다.** 전에는 모든 구간이 출발지
+                    // 하나를 썼다 — 다섯 번째 구간을 찍으려고 지도를 열면 회사가
+                    // 나와서, 일산까지 손으로 끌어야 했다. 다음 정류장은 이전
+                    // 정류장 근처에 있으니 거기서 시작하는 것이 맞다.
+                    near: startPoint(before: index),
+                    isLast: index == steps.count - 1,
+                    homeName: home.name,
+                    store: store,
+                    onDelete: steps.count > 1 ? { steps.remove(at: index) } : nil
+                )
+            }
+        }
+    }
+
+    private var summary: some View {
+        HStack {
+            Text("총 \(totalMinutes)분")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+            Spacer()
+            Text("도착예정은 이 시간에서 나옵니다")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.4))
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(accent.opacity(0.10)))
+    }
+
+    /// 지우기. 되돌릴 수 없으니 한 번 묻는다.
+    private var deleteButton: some View {
+        Button(role: .destructive) { confirmingDelete = true } label: {
+            Text("이 경로 지우기")
+                .font(.system(size: 14))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(.red.opacity(0.15)))
+                .foregroundStyle(.red)
+        }
+        .buttonStyle(.plain)
+        .confirmationDialog("이 경로를 지울까요?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("지우기", role: .destructive) { Task { await remove() } }
+            Button("그만두기", role: .cancel) {}
+        } message: {
+            Text("되돌릴 수 없습니다. 진행 중인 귀가가 이 경로를 쓰고 있으면 남은 시간을 거리로 짐작하게 됩니다.")
+        }
+    }
+
+    private func remove() async {
+        guard let editing else { return }
+        isSaving = true
+        defer { isSaving = false }
+        if await store.delete(editing.id) {
+            onDeleted?()
+            dismiss()
+        } else {
+            failure = store.lastError ?? "지우지 못했습니다."
+        }
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.75))
+    }
+
+    // MARK: - 저장
+
+    private func save() async {
+        guard let originCoordinate else { return }
+        isSaving = true
+        defer { isSaving = false }
+        failure = nil
+
+        do {
+            var tracer = RouteTracer()
+            // 버스 구간에 노선번호가 있으면 그 노선이 지나는 정류장을 물어 온다.
+            // 서버만 공공데이터 키를 갖고 있으므로 이쪽으로 나간다.
+            tracer.busWaypoints = { [store] no, from, fromName, toName in
+                await store.busWaypoints(no: no, from: from,
+                                         fromName: fromName, toName: toName)
+            }
+            let legs = try await tracer.plot(origin: originCoordinate, steps: resolvedSteps)
+            let draft = RouteDraft(name: name.trimmingCharacters(in: .whitespaces), home: home, legs: legs)
+            guard let id = await store.save(draft, replacing: editing?.id) else {
+                failure = store.lastError ?? "저장하지 못했습니다."
+                return
+            }
+            onSaved(id)
+            dismiss()
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - 구간 한 줄
+
+private struct StepRow: View {
+
+    @Binding var step: RouteTracer.Step
+    let near: CLLocationCoordinate2D
+    /// 마지막 구간의 도착지는 집이다. 좌표를 묻지 않는다.
+    let isLast: Bool
+    let homeName: String
+    let store: RouteStore
+    let onDelete: (() -> Void)?
+
+    /// 검색이 준 원래 이름. 사용자가 이름을 고쳐도 "어디를 찍었는지" 는 남아야 한다.
+    @State private var found = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Picker("", selection: $step.mode) {
+                    ForEach(RouteLeg.Mode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.white.opacity(0.8))
+
+                Spacer(minLength: 0)
+
+                // **버스에만 노선번호를 묻는다.** 있으면 그 노선이 실제로 지나는
+                // 정류장을 따라 선을 그린다. 비워 두면 지금까지처럼 자동차 경로다 —
+                // 서울 시내버스는 노선 자료에 없으므로 비워 두는 것이 정상이다.
+                if step.mode == .bus {
+                    TextField("노선", text: Binding(
+                        get: { step.busNo ?? "" },
+                        set: { step.busNo = $0.isEmpty ? nil : $0 }))
+                        .keyboardType(.numbersAndPunctuation)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .multilineTextAlignment(.center)
+                        .frame(width: 52)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08)))
+                        .foregroundStyle(.white)
+                }
+
+                Stepper("\(max(1, step.minutes))분", value: $step.minutes, in: 1...240)
+                    .fixedSize()
+                    .foregroundStyle(.white)
+
+                if let onDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "minus.circle")
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                }
+            }
+
+            if isLast {
+                // 마지막은 집이다. 고를 것이 없다.
+                Text("도착 · \(homeName)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.55))
+            } else if step.mode.moves {
+                PlacePicker(
+                    title: step.to == nil ? "도착지를 찾으세요" : (found.isEmpty ? "위치 지정됨" : found),
+                    near: near,
+                    store: store
+                ) { hit in
+                    found = hit.name
+                    step.to = hit.coordinate
+                    // 검색이 준 이름을 그대로 쓰되, 고칠 수 있게 둔다.
+                    if step.toName.isEmpty { step.toName = hit.name }
+                }
+
+                // **이름은 따로 고칠 수 있어야 한다.**
+                //
+                // 버스정류장은 애플 지도에 시설로 등록되어 있지 않다. "환승로터리" 를
+                // 찾으면 근처 GS25 가 나온다. 좌표는 245m 차이라 묻히지만(이탈 판정
+                // 기준이 1km) 이름은 사람이 읽는 값이다 — 가족 카드에 "GS25까지 9분"
+                // 이 뜨면 그건 고장으로 보인다.
+                if step.to != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "textformat")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.3))
+                        TextField("카드에 보일 이름", text: $step.toName)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.05)))
+                }
+            } else {
+                // 대기 구간은 자리가 바뀌지 않는다. 이름만 있으면 카드에 뜬다.
+                TextField("163번 대기", text: $step.toName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.05)))
+                    .foregroundStyle(.white)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.05)))
+    }
+}
+
+// MARK: - 장소 고르기
+
+/// 이름으로 장소를 찾아 하나 고른다.
+private struct PlacePicker: View {
+
+    let title: String
+    let near: CLLocationCoordinate2D
+    let store: RouteStore
+    var onPick: (PlaceSearch.Hit) -> Void
+
+    private let accent = Color(red: 0.42, green: 0.85, blue: 0.62)
+
+    /// 같은 이름이 방향별로 여럿이라 ARS 번호로 구분한다.
+    /// 정류장 기둥에 적힌 번호라 사람이 눈으로 맞출 수 있다.
+    private func stopContext(_ stop: BusStop) -> String? {
+        stop.number.map { "정류장 번호 \($0)" }
+    }
+
+    private func findStops(_ query: String) {
+        stopLookup?.cancel()
+        guard query.trimmingCharacters(in: .whitespaces).count >= 2 else {
+            stops = []
+            return
+        }
+        stopLookup = Task {
+            // 검색과 같은 박자로 기다린다. 한 글자마다 서버를 부를 이유가 없다.
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            let found = await store.stopsNamed(query)
+            guard !Task.isCancelled else { return }
+            stops = found
+        }
+    }
+
+    @State private var search = PlaceSearch()
+    @State private var text = ""
+    @State private var isOpen = false
+    @State private var isMapping = false
+    /// 공공데이터가 아는 정류장. 애플 지도보다 **먼저** 보여 준다.
+    @State private var stops: [BusStop] = []
+    @State private var stopLookup: Task<Void, Never>?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { isOpen.toggle() } label: {
+                HStack {
+                    Text(title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(title.hasPrefix("도착지") || title.hasPrefix("출발지") ? 0.35 : 0.9))
+                    Spacer()
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.05)))
+            }
+            .buttonStyle(.plain)
+
+            if isOpen {
+                TextField("역·정류장 이름", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.08)))
+                    .foregroundStyle(.white)
+                    .onChange(of: text) { _, new in
+                        search.near = near
+                        search.search(new)
+                        findStops(new)
+                    }
+
+                if search.isSearching {
+                    ProgressView().controlSize(.small).tint(.white.opacity(0.4))
+                }
+
+                // **정류장이 먼저다.** 애플 지도에는 버스정류장이 시설로 없어서
+                // "환승로터리" 를 치면 근처 편의점이 나온다. 공공데이터는 그
+                // 이름을 정확히 알고 좌표도 함께 준다.
+                ForEach(stops) { stop in
+                    Button {
+                        onPick(PlaceSearch.Hit(name: stop.name, context: stopContext(stop),
+                                               coordinate: stop.coordinate))
+                        text = ""
+                        isOpen = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bus.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(accent)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(stop.name)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.white)
+                                if let context = stopContext(stop) {
+                                    Text(context)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white.opacity(0.4))
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                ForEach(search.hits) { hit in
+                    Button {
+                        onPick(hit)
+                        text = ""
+                        isOpen = false
+                    } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(hit.name)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.white)
+                            if let context = hit.context {
+                                Text(context)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if let message = search.lastError, !search.isSearching {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange.opacity(0.8))
+                }
+
+                // **검색으로는 못 찾는 자리가 늘 있다.** 버스정류장은 애플 지도에
+                // 시설로 없어서 "환승로터리" 를 치면 근처 편의점이 나온다. 그 자리가
+                // 어딘지는 쓰는 사람이 아니까, 직접 찍을 길을 항상 열어 둔다.
+                Button { isMapping = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 11))
+                        Text("지도에서 찍기")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $isMapping) {
+            MapPointPicker(
+                start: near,
+                title: text,
+                findStops: { await store.nearbyStops($0) },
+                searchStops: { await store.stopsNamed($0) }
+            ) { officialName, coordinate in
+                // 정류장을 골랐으면 그 공식 이름을, 지도만 찍었으면 사용자가 친
+                // 글자를 쓴다. 지도에서 찍는 건 검색이 그 이름을 모를 때다.
+                let name = officialName ?? text
+                onPick(PlaceSearch.Hit(name: name, context: nil, coordinate: coordinate))
+                text = ""
+                isOpen = false
+            }
+        }
+    }
+}

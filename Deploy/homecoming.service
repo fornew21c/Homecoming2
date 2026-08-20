@@ -1,0 +1,51 @@
+[Unit]
+Description=귀가마중 서버
+Documentation=https://github.com/wchheo/homecoming
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=homecoming
+Group=homecoming
+WorkingDirectory=/opt/homecoming
+
+# 비밀값은 여기 있다. 유닛 파일에 적지 않는다 — 유닛은 저장소에 들어가고
+# `systemctl cat` 으로 누구나 읽는다.
+#   HOMECOMING_APNS_KEY=/opt/homecoming/secrets/AuthKey_XXXXXXXXXX.p8
+#   HOMECOMING_APNS_KEY_ID=XXXXXXXXXX
+#   HOMECOMING_TEAM_ID=YYYYYYYYYY
+#   HOMECOMING_APNS_ENV=production
+#   HOMECOMING_DB=/var/lib/homecoming/homecoming.sqlite
+EnvironmentFile=/etc/homecoming.env
+
+# 127.0.0.1 로만 듣는다. HTTPS 는 앞의 Caddy 가 한다.
+# 이 서버 자체는 평문 HTTP 라 바깥에 그대로 열면 토큰이 평문으로 흐른다.
+ExecStart=/usr/bin/python3 -u /opt/homecoming/homecoming_server.py --host 127.0.0.1 --port 8787
+
+Restart=always
+RestartSec=2
+
+# --- 격리 ---------------------------------------------------------------
+#
+# 이 서버는 사람들의 실시간 위치를 다룬다. 털리면 되돌릴 방법이 없으므로,
+# 털렸을 때 닿을 수 있는 범위를 미리 좁혀 둔다.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# APNs 로 나가는 연결만 필요하다.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# DB 만 쓸 수 있다. 코드 디렉터리(/opt/homecoming)는 읽기 전용이다.
+ReadWritePaths=/var/lib/homecoming
+
+[Install]
+WantedBy=multi-user.target

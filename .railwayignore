@@ -1,0 +1,24 @@
+# 업로드하지 않는 것. Dockerfile 이 COPY 하지 않는 파일이라 이미지에는 원래 안 들어가지만,
+# 빌드 컨텍스트로 올려 보낼 이유도 없다.
+
+# 비밀값 — 공공데이터 서비스 키, APNs 키 경로.
+.env.local
+Server/.env.local
+*.p8
+
+# 위치 이력이 들어 있는 로컬 개발 DB.
+Server/*.sqlite
+Server/*.sqlite-wal
+Server/*.sqlite-shm
+
+# iOS 앱 — 서버 이미지와 무관하다.
+App/
+Widget/
+Shared/
+Homecoming.xcodeproj/
+Tools/
+docs/
+build/
+DerivedData/
+.DS_Store
+__pycache__/

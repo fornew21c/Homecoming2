@@ -1,0 +1,28 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# 생성물 — Tools/generate_project.rb 로 언제든 다시 만든다.
+# 절대경로가 들어가 있어 다른 사람 기계에서 그대로 열리지 않는다.
+Homecoming.xcodeproj/
+
+# 서버 데이터 — 위치 이력이 들어 있다. 절대 커밋하지 않는다.
+Server/*.sqlite
+Server/*.sqlite-wal
+Server/*.sqlite-shm
+
+# 인증 키
+*.p8
+
+# 비밀값 — APNs 키 경로, 공공데이터 서비스 키.
+# 이 파일이 커밋되면 키가 저장소 이력에 영구히 남는다.
+.env.local
+Server/.env.local
+
+.DS_Store
+.route-dump
+__pycache__/
+*.pyc
