@@ -216,7 +216,7 @@ final class HomecomingCoordinator {
     @discardableResult
     func setHomeToCurrentLocation(name: String = "집") async -> Bool {
         guard let location = await awaitLocation(timeout: 10) else {
-            lastError = "현재 위치를 확인하지 못했습니다."
+            lastError = "위치를 아직 못 잡았습니다. 잠시 뒤 다시 눌러 주세요."
             return false
         }
         let place = HomePlace(name: name, coordinate: location.coordinate)
@@ -318,7 +318,7 @@ final class HomecomingCoordinator {
         // 액티비티를 띄우려면 출발 시점의 ETA 가 있어야 한다.
         // 위치를 아직 못 잡았으면 잠깐 기다린다 — 여기서 실패하면 시작 자체가 없다.
         guard let origin = await waitForLocation(timeout: 8) else {
-            lastError = "현재 위치를 확인하지 못했습니다."
+            lastError = "위치를 아직 못 잡았습니다. 잠시 뒤 다시 눌러 주세요."
             HomecomingLog.activity.error("시작 실패: 위치 픽스 없음")
             return
         }
@@ -921,17 +921,43 @@ final class HomecomingCoordinator {
 
     /// 집 등록처럼 추적과 무관한 자리에서 픽스 하나를 받아 온다.
     private func awaitLocation(timeout: TimeInterval) async -> CLLocation? {
-        if let location = tracker.lastLocation { return location }
+        // **여기도 나이를 본다.** 집은 한 번 정하면 계속 쓰는 값이라, 낡은 픽스로
+        // 정하면 도착 판정과 가족 지도가 통째로 어긋난다.
+        if let location = tracker.lastLocation,
+           Date().timeIntervalSince(location.timestamp) < 60 {
+            return location
+        }
         tracker.requestOneShotLocation()
         return await pollLocation(timeout: timeout)
     }
 
-    private func pollLocation(timeout: TimeInterval) async -> CLLocation? {
+    /// 픽스 하나를 기다린다. **낡은 값은 안 받는다.**
+    ///
+    /// `CLLocationManager` 는 마지막으로 알던 자리를 계속 들고 있다. 그래서
+    /// `lastLocation` 이 있다는 것은 "지금 어디인지 안다" 는 뜻이 아니다 — 몇 시간
+    /// 전 자리일 수 있다.
+    ///
+    /// 이 검사가 없어서 실제로 틀렸다(2026-08-21). `waitForLocation` 은 60초보다
+    /// 낡은 픽스를 걸렀는데, 걸러 낸 뒤 부르는 이 함수가 **그 같은 값을 즉시**
+    /// 돌려줬다. 집에서 잡힌 옛 픽스가 출발 좌표가 되어 일산에서 귀가를 시작했을 때
+    /// 남은거리가 비정상적으로 짧게 떴고, 새 픽스가 들어온 뒤 다시 누르면 맞았다.
+    ///
+    /// **낡은 값을 돌려주지 않는다.** 못 잡으면 nil 이고, 부르는 쪽이 시작을
+    /// 거절한다 — 틀린 거리를 그리는 것보다 "아직 위치를 못 잡았다" 가 낫다.
+    /// 사용자가 다시 누르면 그때는 추적이 켜져 있어 대개 바로 잡힌다.
+    private func pollLocation(timeout: TimeInterval, maxAge: TimeInterval = 60) async -> CLLocation? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let location = tracker.lastLocation { return location }
+            if let location = tracker.lastLocation,
+               Date().timeIntervalSince(location.timestamp) < maxAge {
+                return location
+            }
             try? await Task.sleep(for: .milliseconds(250))
         }
-        return tracker.lastLocation
+        if let stale = tracker.lastLocation {
+            HomecomingLog.location.warning(
+                "픽스가 낡았다 \(Int(Date().timeIntervalSince(stale.timestamp)))초 전 — 쓰지 않는다")
+        }
+        return nil
     }
 }

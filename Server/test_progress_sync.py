@@ -310,3 +310,47 @@ class TotalMetersWidens(unittest.TestCase):
         row = hs.widen_total(self.session(), 1000)
         self.assertEqual(row["total_meters"], 6721,
                          "분모가 따라 줄면 진행률이 늘 같은 자리에 머문다")
+
+
+class SameJourney(unittest.TestCase):
+    """진행 중인 세션을 이어 쓸지 (`same_journey`).
+
+    경로 없는 귀가의 전체거리는 출발 시점의 직선거리다. 다른 도시에서 다시 시작한
+    것을 같은 세션에 이어붙이면 분모가 옛 출발지 기준으로 남아 진행 바가 깨진다 —
+    일산에서 눌러 6.7km 로 시작한 세션에 여의도(19.6km)에서 다시 누른 경우다.
+    """
+
+    def row(self, route_id=None, last=None):
+        hs.db().execute("DELETE FROM sessions")
+        hs.db().execute(
+            """INSERT INTO sessions (id, traveler, traveler_name, home_lat, home_lon,
+               home_radius, home_name, total_meters, remaining_meters, stage, transport,
+               expected_arrival, started_at, route_id, last_lat, last_lon)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("s1", "acct", "아빠", HOME[0], HOME[1], 120, "집", 0, 0, "leaving", "walk",
+             hs.iso(hs.now()), hs.iso(hs.now()), route_id,
+             last[0] if last else None, last[1] if last else None))
+        hs.db().commit()
+        return hs.db().execute("SELECT * FROM sessions WHERE id = 's1'").fetchone()
+
+    def test_같은_자리에서_다시_누르면_이어_쓴다(self):
+        # 앱이 죽어 다시 켠 경우다. 200m 는 같은 자리로 본다.
+        row = self.row(last=(37.5286, 126.9202))
+        self.assertTrue(hs.same_journey(row, None, 37.5304, 126.9202))
+
+    def test_다른_도시에서_누르면_새_귀가다(self):
+        row = self.row(last=(37.6750, 126.7700))          # 일산
+        self.assertFalse(hs.same_journey(row, None, 37.5286, 126.9202))   # 여의도
+
+    def test_경로가_같으면_출발지를_보지_않는다(self):
+        # 경로가 있으면 전체거리가 경로에서 오므로 출발지가 분모를 흔들지 않는다.
+        row = self.row(route_id="r1", last=(37.6750, 126.7700))
+        self.assertTrue(hs.same_journey(row, "r1", 37.5286, 126.9202))
+
+    def test_경로가_바뀌면_새_귀가다(self):
+        row = self.row(route_id="r1", last=(37.5286, 126.9202))
+        self.assertFalse(hs.same_journey(row, "r2", 37.5286, 126.9202))
+
+    def test_출발_좌표를_안_보내면_예전처럼_이어_쓴다(self):
+        row = self.row(last=(37.6750, 126.7700))
+        self.assertTrue(hs.same_journey(row, None, None, None))

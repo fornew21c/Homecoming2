@@ -1540,6 +1540,29 @@ def route_remaining(legs, progress):
     return int(remaining)
 
 
+def same_journey(existing, route_id, lat, lon):
+    """진행 중인 세션을 이어 쓸 것인가.
+
+    경로가 같으면 같은 귀가로 본다. **경로가 없으면 출발지도 본다** — 경로 없는
+    귀가의 전체거리는 출발 시점의 직선거리라, 다른 도시에서 다시 시작한 것을 같은
+    세션에 이어붙이면 분모가 옛 출발지 기준으로 남는다. 일산에서 눌러 6.7km 로
+    시작한 세션에 여의도(19.6km)에서 다시 누르면 남은거리가 분모를 넘어 진행 바가
+    깨진다(2026-08-21).
+
+    문턱은 `stage_for` 의 `nearby` 와 같은 값이다 — 새 숫자를 만들지 않는다.
+    그 거리 안에서 다시 누른 것은 같은 자리에서 다시 누른 것으로 본다(앱이 죽어
+    다시 켠 경우가 그렇다).
+
+    출발 좌표를 안 보낸 앱이면 판단할 재료가 없으니 예전처럼 이어 쓴다.
+    """
+    if (existing["route_id"] or None) != (route_id or None):
+        return False
+    if existing["route_id"] or lat is None or existing["last_lat"] is None:
+        return True
+    moved = haversine(lat, lon, existing["last_lat"], existing["last_lon"])
+    return moved <= max(existing["home_radius"] * 5, 800)
+
+
 def widen_total(session, straight):
     """전체거리를 남은거리보다 작지 않게 넓힌다. 넓혔으면 갱신된 행을 돌려준다.
 
@@ -2455,6 +2478,13 @@ class Handler(BaseHTTPRequestHandler):
         # 둘이 어긋난다. 더 나쁜 경우는 이렇다 — 앱이 죽으면 세션이 24시간 남고,
         # 다음 날 귀가 시작을 누르면 **어제 세션이 재사용되면서 오늘 고른 경로가
         # 조용히 무시된다.** 실제로 시험 중에 이걸로 걸렸다.
+        # 출발 좌표를 먼저 읽는다 — 재사용 판정(`same_journey`)이 이걸 본다.
+        try:
+            start_lat = float(body["lat"])
+            start_lon = float(body["lon"])
+        except (KeyError, TypeError, ValueError):
+            start_lat = start_lon = None
+
         existing = self.active_session(me)
         if existing:
             started = parse_iso(existing["started_at"])
@@ -2465,11 +2495,11 @@ class Handler(BaseHTTPRequestHandler):
                 hours = "?" if started is None else f"{(now() - started).total_seconds() / 3600:.1f}"
                 log(f"  세션 {existing['id']} 는 {hours}시간 전 것이다 — 닫고 새로 연다")
                 close_session(existing, "stopped")
-            elif (existing["route_id"] or None) == (body.get("routeId") or None):
+            elif same_journey(existing, body.get("routeId"), start_lat, start_lon):
                 log(f"  이미 진행 중인 세션 {existing['id']} 재사용")
                 return self.reply(200, {"sessionId": existing["id"]})
             else:
-                log(f"  경로가 바뀌었다 — 세션 {existing['id']} 를 닫고 새로 연다")
+                log(f"  다른 귀가다 — 세션 {existing['id']} 를 닫고 새로 연다")
                 close_session(existing, "stopped")
 
         route_id = body.get("routeId")
@@ -2508,7 +2538,8 @@ class Handler(BaseHTTPRequestHandler):
         radius = max(float(home.get("arrivalRadius") or 120), MIN_ARRIVAL_RADIUS)
         session_id = uuid.uuid4().hex[:12]
 
-        # **출발 좌표.** 앱이 보내면 첫 카드부터 지도가 그려진다.
+        # **출발 좌표는 위에서 읽었다**(재사용 판정이 먼저 쓴다). 여기서는 그 값이
+        # 무엇을 더 하는지 적어 둔다 — 앱이 보내면 첫 카드부터 지도가 그려진다.
         #
         # `content_state` 는 `last_lat` 이 있을 때만 좌표를 싣고, 그 값은 위치
         # 보고에서만 채워졌다(`recompute`). 그래서 세션 시작 푸시에는 좌표가 없고,
@@ -2517,11 +2548,6 @@ class Handler(BaseHTTPRequestHandler):
         # (2026-08-20 실기기 검증에서 그렇게 짚었다).
         #
         # 없으면 예전대로 돈다 — 이 키를 모르는 옛 앱이 있다.
-        try:
-            start_lat = float(body["lat"])
-            start_lon = float(body["lon"])
-        except (KeyError, TypeError, ValueError):
-            start_lat = start_lon = None
 
         # 경로가 있으면 첫 도착예정부터 아는 값이다. 위치가 한 건도 안 와도 맞다.
         # 없으면 20분이라는 자리표시자로 시작해서 첫 위치에 덮어쓴다.
