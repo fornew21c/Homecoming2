@@ -71,6 +71,10 @@ struct ContentView: View {
             coordinator.resumeIfNeeded()
             coordinator.requestAuthorization()
             coordinator.primeCurrentLocation()
+            // **경로 목록을 여기서도 받는다.** 예전에는 `RouteCard` 의 `.task` 에서만
+            // 받아서, 앱을 켜고 `귀가` 탭에 머무르면 목록이 비어 있었다 — 그러면
+            // 고른 경로의 이름을 그릴 수 없다(`plannedJourneyCard`).
+            await environment.routes.refresh()
             await runLaunchArguments()
         }
     }
@@ -131,6 +135,7 @@ struct ContentView: View {
         }
         travelerStripCard
         runStatusCard
+        plannedJourneyCard
         controls
         if let message = errorMessage {
             Text(message)
@@ -276,6 +281,87 @@ struct ContentView: View {
     /// 이름·진단은 `설정` 탭으로 옮겼다 — 한 카드에 성격이 다른 셋이 섞여
     /// 있었다(상태·설정값·진단값). 가족이 보는 화면에 가까워야 하는 탭에
     /// 개발용 숫자가 함께 내려가 있을 이유가 없다.
+    /// 이번 귀가에 **무엇으로 가는가**. 대기 중일 때만 나온다.
+    ///
+    /// 경로는 `경로` 탭에서 고르는데 시작 버튼은 이 탭에 있다. 그래서 무엇으로
+    /// 시작하는지 확인하려면 탭을 옮겨 갔다 와야 했다 — 매일 누르는 버튼 앞에서
+    /// 그건 비싸다. 고른 것을 여기 적어 두면 누르기 전에 보인다.
+    ///
+    /// **귀가 중에는 그리지 않는다.** 위의 `travelerStripCard` 가 같은 것을 더
+    /// 자세히(노선도·지도) 말하므로 두 번 적을 자리가 없다.
+    @ViewBuilder
+    private var plannedJourneyCard: some View {
+        if mode == .live, !activity.isRunning {
+            let route = coordinator.selectedRouteID.flatMap { id in
+                environment.routes.routes.first { $0.id == id }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("이번 귀가")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.6))
+
+                if let route {
+                    Text("\(route.name) · \(route.durationText)")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                    if let stops = route.stops, !stops.isEmpty {
+                        // 이름을 점에서 자른다. `출발역.은행앞` 처럼 붙는
+                        // 이름이 실제로 있어서 한 줄에 안 들어간다 — 서버
+                        // `short_place()` 와 같은 규칙이다.
+                        Text(stops.map { $0.name.split(separator: ".").first.map(String.init)
+                                          ?? $0.name }.joined(separator: " › "))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .lineLimit(3)
+                    }
+                } else if let minutes = coordinator.plannedMinutes, minutes > 0 {
+                    Text("경로 없이 · \(minutes)분")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("지금 출발하면 \(Self.clockText(minutesFromNow: minutes)) 도착 예정")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.45))
+                } else {
+                    Text("경로 없이")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("경로 탭에서 경로를 고르거나, 예상 소요시간을 적어 주세요.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.white.opacity(0.05))
+            )
+        }
+    }
+
+    /// `-homecomingDumpRoute` 가 찍는 모양. 서버가 `POST /route` 로 받는 것과 같다.
+    ///
+    /// `RouteLeg` 를 그대로 쓴다 — 그 타입이 이미 `Codable` 이고 키가 서버와 같아서,
+    /// 여기서 다시 적으면 두 벌이 된다.
+    private struct RouteWire: Decodable {
+        struct Home: Decodable {
+            let lat: Double
+            let lon: Double
+            let name: String
+            let radius: Double
+        }
+        let name: String
+        let home: Home
+        let legs: [RouteLeg]
+    }
+
+    /// 지금부터 N분 뒤의 시각. `RouteCard` 의 같은 함수와 같은 형식으로 적는다 —
+    /// 두 화면이 같은 값을 다르게 쓰면 어느 쪽이 맞는지 알 수 없다.
+    private static func clockText(minutesFromNow minutes: Int) -> String {
+        Date().addingTimeInterval(TimeInterval(minutes * 60))
+            .formatted(.dateTime.hour().minute())
+    }
+
     private var runStatusCard: some View {
         Card {
             HStack {
@@ -504,6 +590,8 @@ struct ContentView: View {
     /// -homecomingListActivities            지금 살아 있는 액티비티를 콘솔로 찍는다
     /// -homecomingToken <token>             인증 토큰 주입 (양쪽 역할 시험용)
     /// -homecomingResetIdentity             키체인 자격을 지우고 새 계정으로 등록
+    /// -homecomingDumpRoute <id|이름>       경로를 서버가 받는 형태 그대로 콘솔에 찍는다
+    /// -homecomingImportRoute <base64>      찍어 둔 경로를 **이 기기 계정으로** 저장한다
     /// -homecomingInvite                    초대 코드를 발급하고 콘솔에 찍는다
     /// -homecomingAcceptCode <code>         받은 코드로 연결한다
     /// -homecomingUnlink <accountId>        연결을 끊는다
@@ -538,6 +626,76 @@ struct ContentView: View {
             for route in environment.routes.routes {
                 print("[귀가마중] 경로 \(route.id) · \(route.name) · \(route.durationText)"
                       + " · 첫구간 [\(route.firstTransport?.rawValue ?? "-")] \"\(route.firstDetail ?? "-")\"")
+            }
+        }
+
+        // **경로를 다른 계정으로 옮기는 길.**
+        //
+        // 경로는 서버에 있고 `GET /route/{id}` 는 소유자만 읽는다(`account_id = me`).
+        // 계정은 키체인에 있고 `ThisDeviceOnly` 라 기기 사이를 넘지 않는다. 그래서
+        // 기기를 바꾸거나 검증용 계정을 새로 만들면 **경로를 옮길 길이 없었다** —
+        // 손으로 다시 만드는 것 말고는. 가족 권한으로 받을 수 있는 것은 좌표열과
+        // 정류장뿐이라(`/session/{id}/route`) 구간별 소요시간이 빠지는데, 그 값은
+        // 대중교통 앱 실측을 옮겨 적은 것이라 짐작으로 대신할 수 없다.
+        //
+        // 그래서 소유 기기가 자기 경로를 **서버가 받는 형태 그대로** 찍게 한다.
+        // 찍은 것을 다른 계정의 `POST /route` 에 그대로 넣으면 값이 하나도 안 바뀐다.
+        if let index = arguments.firstIndex(of: "-homecomingDumpRoute"), index + 1 < arguments.count {
+            let wanted = arguments[index + 1]
+            await environment.routes.refresh()
+            let found = environment.routes.routes.first { $0.id == wanted || $0.name == wanted }
+            if let found, let detail = await environment.routes.detail(of: found.id) {
+                let payload: [String: Any] = [
+                    "name": detail.name,
+                    // `RouteDraft.totalSeconds` 와 같은 계산이다 — 마지막 구간이 끝나는 시각.
+                    "totalSeconds": detail.legs.map { $0.startsAt + $0.seconds }.max() ?? 0,
+                    "home": [
+                        "lat": detail.home.latitude,
+                        "lon": detail.home.longitude,
+                        "name": detail.home.name,
+                        "radius": detail.home.arrivalRadius,
+                    ],
+                    "legs": detail.legs.map(\.wire),
+                ]
+                if let data = try? JSONSerialization.data(
+                    withJSONObject: payload, options: [.sortedKeys, .withoutEscapingSlashes]),
+                   let text = String(data: data, encoding: .utf8) {
+                    // 한 줄로 찍는다. 여러 줄이면 콘솔에서 잘라 붙이기가 나쁘다.
+                    print("[귀가마중] 경로 JSON \(detail.id) \(text)")
+                }
+            } else {
+                print("[귀가마중] 경로를 못 찾았다: \(wanted)")
+            }
+        }
+
+        // **찍어 둔 경로를 이 기기 계정에 넣는다.** `-homecomingDumpRoute` 의 짝이다.
+        //
+        // 기기를 바꾸면 계정이 새로 생기고(키체인이 `ThisDeviceOnly`) 경로가 하나도
+        // 없다. 옛 기기에서 찍은 것을 여기 넣으면 **값이 하나도 안 바뀌고** 옮겨진다 —
+        // 구간별 소요시간은 대중교통 앱 실측을 손으로 옮겨 적은 값이라, 좌표만 있는
+        // 사본으로 대신할 수 없다(그건 시간을 짐작하게 된다).
+        //
+        // **base64 로 받는다.** 경로 JSON 이 6KB 남짓이고 한글 이름과 따옴표가 들어
+        // 있어서, 그대로 넘기면 셸을 지나오는 동안 깨진다.
+        if let index = arguments.firstIndex(of: "-homecomingImportRoute"), index + 1 < arguments.count {
+            guard let data = Data(base64Encoded: arguments[index + 1]),
+                  let wire = try? JSONDecoder().decode(RouteWire.self, from: data)
+            else {
+                print("[귀가마중] 경로를 읽지 못했다 — base64 이거나 형식이 다르다")
+                return
+            }
+            let draft = RouteDraft(
+                name: wire.name,
+                home: HomePlace(name: wire.home.name,
+                                coordinate: .init(latitude: wire.home.lat, longitude: wire.home.lon),
+                                arrivalRadius: wire.home.radius),
+                legs: wire.legs)
+            if let id = await environment.routes.save(draft, replacing: nil) {
+                print("[귀가마중] 경로 저장 \(id) · \(wire.name) · \(draft.totalSeconds / 60)분"
+                      + " · 구간 \(wire.legs.count)개")
+                coordinator.selectedRouteID = id
+            } else {
+                print("[귀가마중] 경로 저장 실패: \(environment.routes.lastError ?? "이유 없음")")
             }
         }
 

@@ -61,6 +61,17 @@ struct SessionStartRequest: Encodable, Sendable {
     /// 드러난다.
     var plannedMinutes: Int?
 
+    /// 출발 좌표. **가족 카드가 처음 뜰 때 지도를 그리는 값이다.**
+    ///
+    /// 서버는 좌표가 있을 때만 갱신값에 실어 보낸다. 예전에는 위치 보고가 한 건
+    /// 올라오기 전까지 그 값이 비어 있어서, 가족은 카드는 받았는데 지도가 없는
+    /// 화면을 봤다 — 1초 뒤 메워지지만 그 사이를 보면 고장으로 읽힌다.
+    ///
+    /// 첫 픽스를 못 받은 상태로 시작하면 nil 이다. 그때는 예전처럼 첫 위치 보고에서
+    /// 메워진다.
+    var lat: Double?
+    var lon: Double?
+
     /// `[P2]` 안전귀가일 때만 의미가 있다.
     let checkInInterval: Double?
 }

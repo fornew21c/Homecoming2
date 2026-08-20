@@ -2488,6 +2488,21 @@ class Handler(BaseHTTPRequestHandler):
         radius = max(float(home.get("arrivalRadius") or 120), MIN_ARRIVAL_RADIUS)
         session_id = uuid.uuid4().hex[:12]
 
+        # **출발 좌표.** 앱이 보내면 첫 카드부터 지도가 그려진다.
+        #
+        # `content_state` 는 `last_lat` 이 있을 때만 좌표를 싣고, 그 값은 위치
+        # 보고에서만 채워졌다(`recompute`). 그래서 세션 시작 푸시에는 좌표가 없고,
+        # 가족은 **카드는 받았는데 지도가 없는 화면**을 봤다. 실제 귀가에서는 앱이
+        # 1초 안에 첫 위치를 올려 메워지지만, 그 사이에 화면을 보면 고장으로 읽힌다
+        # (2026-08-20 실기기 검증에서 그렇게 짚었다).
+        #
+        # 없으면 예전대로 돈다 — 이 키를 모르는 옛 앱이 있다.
+        try:
+            start_lat = float(body["lat"])
+            start_lon = float(body["lon"])
+        except (KeyError, TypeError, ValueError):
+            start_lat = start_lon = None
+
         # 경로가 있으면 첫 도착예정부터 아는 값이다. 위치가 한 건도 안 와도 맞다.
         # 없으면 20분이라는 자리표시자로 시작해서 첫 위치에 덮어쓴다.
         started = now()
@@ -2516,18 +2531,26 @@ class Handler(BaseHTTPRequestHandler):
             planned_seconds = planned * 60 if planned > 0 else None
             first_arrival = (started + timedelta(seconds=planned_seconds)) if planned_seconds \
                 else (started + timedelta(minutes=20))
+            # 출발 좌표가 있으면 첫 거리도 안다. 0 으로 두면 카드에 "0m 남음" 이
+            # 뜨는데 그건 도착했다는 뜻으로 읽힌다 — 경로가 있는 쪽이 이미 같은
+            # 이유로 `route_length()` 를 미리 넣는다. `handle_location` 이 첫 보고에서
+            # 하는 계산과 같은 것을 한 보고 앞당겨 하는 것이다.
+            if start_lat is not None and home.get("lat") is not None:
+                first_meters = int(haversine(start_lat, start_lon,
+                                             float(home["lat"]), float(home["lon"])))
 
         db().execute(
             """INSERT INTO sessions (id, traveler, traveler_name, home_lat, home_lon, home_radius,
                home_name, total_meters, remaining_meters, stage, transport, expected_arrival,
-               detail, started_at, route_id, measured_at, planned_seconds)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               detail, started_at, route_id, measured_at, planned_seconds, last_lat, last_lon)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 session_id, me, body.get("travelerName") or "귀가자",
                 float(home.get("lat") or 0), float(home.get("lon") or 0), radius,
                 home.get("name") or "집",
                 first_meters, first_meters, "leaving", first_transport, iso(first_arrival),
                 first_detail, iso(started), route_id, iso(started), planned_seconds,
+                start_lat, start_lon,
             ),
         )
         db().commit()

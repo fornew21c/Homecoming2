@@ -388,6 +388,11 @@ final class HomecomingCoordinator {
             // 보내지 않는다 — 서버도 보지 않고, 요청에 둘이 같이 있으면 어느 쪽이
             // 이기는지 읽는 사람이 알 수 없다.
             plannedMinutes: selectedRouteID == nil ? plannedMinutes : nil,
+            // 출발 자리. 아래 `report(origin, ...)` 로 보내는 것과 같은 좌표지만,
+            // 그 보고는 세션이 만들어진 **뒤에** 나간다 — 그 사이에 가족 카드가
+            // 먼저 뜨고, 좌표가 없으면 지도 없는 카드가 된다.
+            lat: origin.coordinate.latitude,
+            lon: origin.coordinate.longitude,
             checkInInterval: safetyMode ? checkInInterval : nil
         )
         Task { [sessions] in
