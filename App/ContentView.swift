@@ -153,6 +153,10 @@ struct ContentView: View {
                     get: { coordinator.selectedRouteID },
                     set: { coordinator.selectedRouteID = $0 }
                 ),
+                plannedMinutes: Binding(
+                    get: { coordinator.plannedMinutes },
+                    set: { coordinator.plannedMinutes = $0 }
+                ),
                 home: home,
                 here: coordinator.currentLocation?.coordinate,
                 isRunning: activity.isRunning
@@ -237,8 +241,14 @@ struct ContentView: View {
     }
 
     /// 데모는 경로가 필요 없다 — 가짜 이동을 재생할 뿐이다.
+    ///
+    /// **경로가 없어도 시작할 수 있다.** 회식·모임에서 귀가하면 저장된 경로가 없는데,
+    /// 그때도 가족은 봐야 한다. 대신 소요시간을 적어야 한다(`canStartWithoutRoute`) —
+    /// 비워 두고 시작하면 가족 화면의 카운트다운이 근거를 잃는다.
     private var canStart: Bool {
-        mode == .demo || (coordinator.home != nil && coordinator.hasUsableRoute)
+        mode == .demo
+            || (coordinator.home != nil
+                && (coordinator.hasUsableRoute || coordinator.canStartWithoutRoute))
     }
 
     /// 막힌 이유. **어느 탭으로 가야 하는지 말한다** — 시작 버튼은 `귀가` 탭에
@@ -246,7 +256,7 @@ struct ContentView: View {
     /// 하는지 알 수 없다.
     private var startBlockedReason: String {
         if coordinator.home == nil { return "경로 탭에서 집 위치를 먼저 등록해 주세요." }
-        return "경로 탭에서 경로를 골라 주세요. 경로가 있어야 도착 시각을 정확히 알립니다."
+        return "경로 탭에서 경로를 고르거나, `경로 없이` 를 고른 뒤 예상 소요시간을 적어 주세요."
     }
 
     private var header: some View {

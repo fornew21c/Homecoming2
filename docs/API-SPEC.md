@@ -198,6 +198,7 @@ POST /session/start
   "travelerName": "아빠",
   "safetyMode": false,
   "routeId": "3f2a1c9d8e00",   // 저장된 경로로 도는 귀가면
+  "plannedMinutes": 60,         // 경로 없이 도는 귀가에서 귀가자가 적은 소요시간
   "checkInInterval": 900        // [P2] safetyMode 가 true 일 때만
 }
 → { "sessionId": "..." }
@@ -208,6 +209,12 @@ POST /session/{sessionId}/location
 POST /session/{sessionId}/checkin    [P2]
 POST /session/{sessionId}/end        { "reason": "arrived" | "stopped" }
 ```
+
+**`routeId` 와 `plannedMinutes` 는 둘 중 하나다.** 둘 다 도착예정의 근거이고, 둘 다
+추정이 아니라 **아는 값**이다 — 앞은 경로에 적힌 실측 소요시간, 뒤는 귀가자가 적은
+시간. 경로가 있으면 서버는 `plannedMinutes` 를 보지 않으므로 앱은 그때 키를 빼고
+보낸다. 둘 다 없으면 서버는 20분 자리표시자로 시작해 첫 위치 보고에서 관측 속도로
+덮어쓴다 — 그 값이 가장 약하다.
 
 `end` 의 `reason` 이 중요하다. **가족 화면에서 "도착"과 "공유 중지"는 달라야 한다.**
 조용해진 이유를 모르면 안전귀가라고 할 수 없다.

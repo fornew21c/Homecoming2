@@ -214,3 +214,57 @@ class TrailAxis(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlannedMinutes(unittest.TestCase):
+    """경로 없이 도는 귀가의 도착예정.
+
+    **앱이 적어 보낸 시간이 도착예정의 주인이다.** 위치 보고로 흔들려서는 안 된다 —
+    지하철처럼 집 쪽으로 곧장 가지 않는 길에서는 접근 속도가 0 에 가깝다가 갑자기
+    뛰므로, 관측으로 보정하면 사람이 적은 시각이 뜻을 잃는다.
+
+    앱이 `plannedMinutes` 를 실어 보내기 시작해서(2026-08-20) 이 계약을 시험으로
+    못박는다. 필드 이름이 바뀌면 여기서 걸린다 — 앱은 조용히 안 보낸 것이 되고
+    서버는 20분 자리표시자로 돈다.
+    """
+
+    def setUp(self):
+        for table in ("sessions", "routes", "fixes", "activities"):
+            hs.db().execute(f"DELETE FROM {table}")
+        hs.db().commit()
+
+    def start(self, body):
+        started = hs.now()
+        hs.db().execute(
+            """INSERT INTO sessions (id, traveler, traveler_name, home_lat, home_lon,
+               home_radius, home_name, total_meters, remaining_meters, stage, transport,
+               expected_arrival, started_at, measured_at, planned_seconds)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("s1", "acct", "아빠", HOME[0], HOME[1], 150, "집", 0, 0, "leaving", "walk",
+             hs.iso(started), hs.iso(started), hs.iso(started),
+             int(body["plannedMinutes"]) * 60 if body.get("plannedMinutes") else None))
+        hs.db().commit()
+        return started
+
+    def test_적어_보낸_시간이_도착예정이_된다(self):
+        started = self.start({"plannedMinutes": 60})
+        # 집에서 3km 떨어진 자리를 두 번 보고한다. 관측 속도가 어떻든 도착예정은
+        # 출발 + 60분이어야 한다.
+        at = started
+        for _ in range(2):
+            at += timedelta(seconds=60)
+            session = hs.db().execute("SELECT * FROM sessions WHERE id = 's1'").fetchone()
+            hs.recompute(session, HOME[0] - 0.027, HOME[1], at)
+        row = hs.db().execute("SELECT expected_arrival FROM sessions WHERE id = 's1'").fetchone()
+        planned = started + timedelta(minutes=60)
+        self.assertLess(abs((hs.parse_iso(row["expected_arrival"]) - planned).total_seconds()), 2)
+
+    def test_적지_않으면_관측으로_짐작한다(self):
+        started = self.start({})
+        at = started + timedelta(seconds=60)
+        session = hs.db().execute("SELECT * FROM sessions WHERE id = 's1'").fetchone()
+        hs.recompute(session, HOME[0] - 0.027, HOME[1], at)
+        row = hs.db().execute("SELECT expected_arrival FROM sessions WHERE id = 's1'").fetchone()
+        # 짐작한 값이라 60분과 같을 이유가 없다. 여기서 보는 것은 "덮어쓴다" 는 것뿐이다.
+        planned = started + timedelta(minutes=60)
+        self.assertGreater(abs((hs.parse_iso(row["expected_arrival"]) - planned).total_seconds()), 60)

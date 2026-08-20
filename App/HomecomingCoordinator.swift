@@ -384,6 +384,10 @@ final class HomecomingCoordinator {
             travelerName: travelerName,
             safetyMode: safetyMode,
             routeId: selectedRouteID,
+            // 경로가 있으면 도착예정의 주인은 그 경로다. 그때는 적어 둔 시간을
+            // 보내지 않는다 — 서버도 보지 않고, 요청에 둘이 같이 있으면 어느 쪽이
+            // 이기는지 읽는 사람이 알 수 없다.
+            plannedMinutes: selectedRouteID == nil ? plannedMinutes : nil,
             checkInInterval: safetyMode ? checkInInterval : nil
         )
         Task { [sessions] in

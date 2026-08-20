@@ -14,6 +14,14 @@ struct RouteCard: View {
     /// 고른 경로. nil 이면 거리 기반 추정으로 돈다.
     @Binding var selectedID: String?
 
+    /// 경로 없이 도는 귀가에서 귀가자가 적는 예상 소요시간(분). nil 이면 안 적었다.
+    ///
+    /// **여기가 그 값을 적는 유일한 자리다.** `경로 없이` 를 고르면 도착예정을
+    /// 계산할 근거가 사라지므로 사람에게 묻는다 — 저장된 경로에 실측 소요시간을
+    /// 적어 두는 것과 같은 생각이다. 적지 않으면 귀가를 시작할 수 없다
+    /// (`ContentView.canStart`).
+    @Binding var plannedMinutes: Int?
+
     /// 경로의 끝. 만들기 화면이 마지막 구간의 도착지로 쓴다.
     let home: HomePlace
     /// 지금 있는 자리. 출발지를 미리 채우는 데 쓴다.
@@ -40,14 +48,23 @@ struct RouteCard: View {
                 Text("서버가 연결되어 있지 않습니다. 경로는 서버에만 존재하므로 쓸 수 없습니다.")
                     .font(.footnote)
                     .foregroundStyle(.orange.opacity(0.9))
-            } else if store.routes.isEmpty {
-                empty
             } else {
-                VStack(spacing: 8) {
-                    ForEach(store.routes) { route in
-                        row(route)
+                VStack(alignment: .leading, spacing: 8) {
+                    if store.routes.isEmpty {
+                        empty
+                    } else {
+                        ForEach(store.routes) { route in
+                            row(route)
+                        }
                     }
+                    // **경로가 없어도 이 줄은 있어야 한다.** 회식·모임에서 귀가하는
+                    // 사람은 저장된 경로가 아예 없고, 그때도 가족은 봐야 한다.
+                    // 예전에는 경로 목록이 비면 안내문만 남아서, 경로를 만들지 않는
+                    // 한 귀가를 시작할 길이 없었다.
                     noRouteRow
+                    // **고른 줄 바로 아래에 둔다.** `noRouteRow` 안에 넣으면 버튼
+                    // 안의 버튼이 되어 어느 것을 눌렀는지 iOS 가 가리지 못한다.
+                    if selectedID == nil { plannedMinutesRow }
                 }
                 .disabled(isRunning)
                 .opacity(isRunning ? 0.45 : 1)
@@ -208,5 +225,101 @@ struct RouteCard: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    /// 얼마나 걸리는지 적는 자리. `경로 없이` 를 골랐을 때만 나온다.
+    ///
+    /// **계산하지 않고 묻는다.** 어느 길로 갈지 모르는 귀가에서 도착예정을 짐작하면
+    /// 가족 화면의 카운트다운이 근거 없이 흔들린다. 사람은 대개 안다 — "한 시간쯤".
+    ///
+    /// 흔한 값을 버튼으로 두고 5분 단위로 다듬게 한다. 숫자 키패드를 띄우지 않는
+    /// 이유는 이 화면이 출발 직전에 열리는 자리라서다. 한 손으로 두 번 눌러 끝나야 한다.
+    private var plannedMinutesRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("얼마나 걸려요?")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                Spacer(minLength: 0)
+                if let minutes = plannedMinutes {
+                    // 도착 시각을 같이 보여 준다. 분만 적으면 몇 시에 닿는지
+                    // 머리로 더해야 하고, 가족이 보는 것은 그 시각이다.
+                    Text("\(Self.clockText(minutesFromNow: minutes)) 도착")
+                        .font(.system(size: 12))
+                        .foregroundStyle(accent.opacity(0.9))
+                }
+            }
+
+            HStack(spacing: 6) {
+                ForEach(Self.presets, id: \.self) { minutes in
+                    Button {
+                        plannedMinutes = minutes
+                    } label: {
+                        Text("\(minutes)분")
+                            .font(.system(size: 13,
+                                          weight: plannedMinutes == minutes ? .semibold : .regular))
+                            .foregroundStyle(plannedMinutes == minutes ? accent : .white.opacity(0.6))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(plannedMinutes == minutes
+                                          ? accent.opacity(0.16) : .white.opacity(0.05))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let minutes = plannedMinutes {
+                HStack(spacing: 10) {
+                    stepButton("minus", to: minutes - Self.step)
+                    Text("\(minutes)분")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .monospacedDigit()
+                        .frame(minWidth: 54)
+                    stepButton("plus", to: minutes + Self.step)
+                    Spacer(minLength: 0)
+                    Button("지우기") { plannedMinutes = nil }
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .buttonStyle(.plain)
+                }
+            } else {
+                Text("적지 않으면 시작할 수 없습니다. 가족 화면의 도착 시각이 이 값에서 나옵니다.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.white.opacity(0.04))
+        )
+    }
+
+    private func stepButton(_ symbol: String, to minutes: Int) -> some View {
+        Button {
+            plannedMinutes = min(Self.maximum, max(Self.step, minutes))
+        } label: {
+            Image(systemName: "\(symbol).circle.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 흔한 값. 30분(가까운 회식)에서 90분(먼 곳)까지가 이 앱이 실제로 다뤄 온 폭이다
+    /// — 저장된 퇴근 경로가 79~82분이다.
+    private static let presets = [20, 30, 45, 60, 90]
+    private static let step = 5
+    private static let maximum = 480
+
+    /// 지금부터 N분 뒤의 시각. "18:42" 처럼 적는다.
+    private static func clockText(minutesFromNow minutes: Int) -> String {
+        let at = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        return at.formatted(.dateTime.hour().minute())
     }
 }
