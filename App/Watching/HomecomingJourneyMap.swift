@@ -125,12 +125,13 @@ struct HomecomingJourneyMap: View {
                     // 진하기와 곱해져 "흐린 파선" 같은 조합이 생기고, 그러면
                     // 아무것도 안 읽힌다. 지하철 구분은 정류장 아이콘이 한다.
                     //
-                    // **지나온 구간은 흐리게.** 자르는 자리는 서버가 준 진행도다 —
+                    // **지나온 구간은 회색으로 얇게.** 자르는 자리는 서버가 준 진행도다 —
                     // 카드의 노선도 점과 **같은 값**이다(`pieces(of:traveler:)`).
                     ForEach(pieces(of: geometry, traveler: traveler)) { piece in
                         MapPolyline(coordinates: piece.points)
-                            .stroke(state.tint.opacity(piece.passed ? 0.22 : 0.75),
-                                    style: Self.stroke(walk: piece.isWalk))
+                            .stroke(piece.passed ? Self.passedColor : state.tint.opacity(0.95),
+                                    style: Self.stroke(walk: piece.isWalk,
+                                                       passed: piece.passed))
                     }
 
                     // **이 경로가 지나는 정류장만 찍는다.**
@@ -302,9 +303,23 @@ struct HomecomingJourneyMap: View {
             longitudeDelta: max((maxLon - minLon) * 1.25, Self.minimumSpan)))
     }
 
-    /// 선 굵기와 점선 여부. 도보만 점선이다.
-    private static func stroke(walk: Bool) -> StrokeStyle {
-        StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round,
+    /// 지나온 길의 색. **색상 자체를 뺀다.**
+    ///
+    /// 예전에는 같은 색의 진하기만 달랐다(`tint` 의 0.22 대 0.75). 지도에는 시설
+    /// 표시와 도로가 함께 그려져 있어서, 같은 색의 흐린 선은 그 배경에 묻히고
+    /// **어디까지 왔는지가 흘깃 봐서 안 읽혔다**(2026-08-21). 파란 선과 회색 선은
+    /// 색상이 달라 한눈에 갈린다.
+    ///
+    /// 지우지 않고 남겨 두는 이유는 지나온 길도 정보이기 때문이다 — 어디를 거쳐
+    /// 왔는지가 "이 사람이 지금 어느 길에 있나" 를 읽는 데 쓰인다.
+    private static let passedColor = Color(white: 0.62).opacity(0.6)
+
+    /// 선 굵기와 점선 여부. 도보만 점선이고, **지나온 길은 얇다.**
+    ///
+    /// 색상에 굵기를 한 번 더 얹는다. 색만으로 가르면 색약인 사람에게는 갈리지
+    /// 않는다 — 굵기는 색과 무관하게 읽힌다.
+    private static func stroke(walk: Bool, passed: Bool) -> StrokeStyle {
+        StrokeStyle(lineWidth: passed ? 3 : 5, lineCap: .round, lineJoin: .round,
                     dash: walk ? [2, 6] : [])
     }
 
