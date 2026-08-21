@@ -167,6 +167,18 @@ struct RouteCard: View {
                     Text("\(route.durationText) · \(route.homeName ?? "집")")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.5))
+
+                    // **집은 하나여야 한다.** 경로는 저장 시점의 집 사본을 들고 있어서
+                    // 집을 옮기면 옛 자리에 남는다 — 마지막 구간의 좌표열도 그 옛 집을
+                    // 향해 그려져 있다. 그 경로로 귀가하면 도착 반경 안에 영영 안 들어와
+                    // **도착 판정이 안 떨어진다.** 조용히 두면 알 방법이 없으므로 적는다.
+                    if let drift = homeDrift(of: route) {
+                        Text("옛 집으로 끝나는 경로예요 — 지금 집에서 \(drift)m."
+                             + " 도착 판정이 안 떨어질 수 있어요. 연필로 열어 다시 저장하세요.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 0)
 
@@ -194,6 +206,17 @@ struct RouteCard: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    /// 그 경로가 끝나는 자리와 지금 집이 얼마나 다른가(m). 도착 반경 안이면 nil 이다.
+    ///
+    /// **문턱은 도착 반경이다.** 그 안이면 옛 집으로 끝나도 도착 판정이 떨어지므로
+    /// 말할 것이 없다. 밖이면 그 경로는 집에 닿지 못한다.
+    /// 좌표를 안 보내는 옛 서버에서는 견주지 않는다.
+    private func homeDrift(of route: HomecomingRoute) -> Int? {
+        guard let lat = route.homeLat, let lon = route.homeLon else { return nil }
+        let meters = CLLocation(latitude: lat, longitude: lon).distance(from: home.location)
+        return meters > home.arrivalRadius ? Int(meters) : nil
     }
 
     /// 경로를 쓰지 않는 선택. 다른 길로 가는 날이 있으니 명시적으로 둔다.

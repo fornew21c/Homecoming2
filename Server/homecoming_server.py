@@ -2185,7 +2185,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/route":
             rows = db().execute(
-                "SELECT id, name, total_seconds, home_name, legs FROM routes "
+                "SELECT id, name, total_seconds, home_name, home_lat, home_lon, "
+                "home_radius, legs FROM routes "
                 "WHERE account_id = ? ORDER BY created_at DESC", (me,),
             ).fetchall()
 
@@ -2196,8 +2197,15 @@ class Handler(BaseHTTPRequestHandler):
                 # 않는다. 그런데 앱은 경로의 구간을 모르니, 없으면 MapKit 이 준
                 # 자동차 경로를 쓰게 된다 — 걸어서 역까지 가는 첫 6분에 카드가
                 # "차량 탑승" 으로 떴다.
+                # **집 좌표도 준다.** 경로는 저장 시점의 집 사본을 들고 있고, 그 뒤에
+                # 집을 옮기면 그 사본이 옛 자리에 남는다. 이름만 주면 앱은 두 집이
+                # 다른지 알 수 없어서, 마지막 구간이 옛 집으로 끝나는 경로를 그냥
+                # 고르게 된다 — 그러면 도착 반경(120m)에 영영 안 들어와 도착 판정이
+                # 안 떨어진다. 좌표를 주면 앱이 견줘 말해 줄 수 있다.
                 out = {"routeId": row["id"], "name": row["name"],
-                       "totalSeconds": row["total_seconds"], "homeName": row["home_name"]}
+                       "totalSeconds": row["total_seconds"], "homeName": row["home_name"],
+                       "home": {"lat": row["home_lat"], "lon": row["home_lon"],
+                                "radius": row["home_radius"]}}
                 try:
                     legs = json.loads(row["legs"])
                 except (TypeError, ValueError):

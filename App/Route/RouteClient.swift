@@ -105,6 +105,20 @@ struct HomecomingRoute: Sendable, Identifiable, Equatable {
     let totalSeconds: Int
     let homeName: String?
 
+    /// 이 경로가 끝나는 자리. **저장 시점의 집 사본이다.**
+    ///
+    /// 집은 하나여야 한다. 그런데 경로는 저장할 때의 집을 함께 들고 있어서, 그 뒤에
+    /// 집을 옮기면 옛 자리에 남는다 — 마지막 구간의 좌표열도 그 옛 집을 향해 그려져
+    /// 있다. 그 경로로 귀가하면 도착 반경(120m)에 영영 안 들어와 **도착 판정이 안
+    /// 떨어진다.** 앱이 그것을 알아보고 말해 줄 수 있게 좌표를 받는다.
+    ///
+    /// 옛 서버는 안 보낸다. 그때는 견주지 않는다.
+    ///
+    /// **좌표를 둘로 나눠 담는다.** `CLLocationCoordinate2D` 는 `Equatable` 이 아니라
+    /// 이 타입의 `Equatable` 준수가 깨진다 — `HomePlace` 도 같은 이유로 그렇게 한다.
+    let homeLat: Double?
+    let homeLon: Double?
+
     /// 첫 구간의 교통수단과 문구.
     ///
     /// **귀가를 시작하는 순간의 카드를 앱이 직접 만들기 때문에 필요하다.**
@@ -243,6 +257,8 @@ struct RemoteRouteClient: RouteClient {
             let name: String
             let totalSeconds: Int
             let homeName: String?
+            struct Home: Decodable { let lat: Double; let lon: Double }
+            let home: Home?
             let firstTransport: String?
             let firstDetail: String?
             let totalMeters: Int?
@@ -253,6 +269,7 @@ struct RemoteRouteClient: RouteClient {
             HomecomingRoute(
                 id: $0.routeId, name: $0.name,
                 totalSeconds: $0.totalSeconds, homeName: $0.homeName,
+                homeLat: $0.home?.lat, homeLon: $0.home?.lon,
                 firstTransport: $0.firstTransport.flatMap(HomecomingAttributes.Transport.init(rawValue:)),
                 firstDetail: $0.firstDetail,
                 totalMeters: $0.totalMeters,
