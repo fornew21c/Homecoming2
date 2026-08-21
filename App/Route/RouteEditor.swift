@@ -39,6 +39,10 @@ struct RouteEditor: View {
     @State private var originName = ""
     @State private var isSaving = false
     @State private var failure: String?
+
+    /// 저장은 됐지만 알려야 할 것. 이게 있으면 창을 자동으로 닫지 않는다 —
+    /// 닫히면 읽을 새가 없다.
+    @State private var notice: String?
     @State private var confirmingDelete = false
 
     private let accent = Color(red: 0.42, green: 0.85, blue: 0.62)
@@ -86,6 +90,19 @@ struct RouteEditor: View {
                         Text(failure)
                             .font(.footnote)
                             .foregroundStyle(.orange)
+                    }
+                    // **저장은 됐는데 선이 실제 노선이 아닌 경우.** 그대로 닫으면
+                    // 아무도 모른다 — 지도에는 그럴듯한 선이 그려져 있고, 그것이
+                    // 자동차 길이라는 것은 저장한 사람만 알 수 있다.
+                    if let notice {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(notice)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                            Button("확인") { dismiss() }
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(20)
@@ -244,6 +261,7 @@ struct RouteEditor: View {
         isSaving = true
         defer { isSaving = false }
         failure = nil
+        notice = nil
 
         do {
             var tracer = RouteTracer()
@@ -253,14 +271,27 @@ struct RouteEditor: View {
                 await store.busWaypoints(no: no, from: from,
                                          fromName: fromName, toName: toName)
             }
-            let legs = try await tracer.plot(origin: originCoordinate, steps: resolvedSteps)
-            let draft = RouteDraft(name: name.trimmingCharacters(in: .whitespaces), home: home, legs: legs)
+            let plotted = try await tracer.plot(origin: originCoordinate, steps: resolvedSteps)
+            let draft = RouteDraft(name: name.trimmingCharacters(in: .whitespaces),
+                                   home: home, legs: plotted.legs)
             guard let id = await store.save(draft, replacing: editing?.id) else {
                 failure = store.lastError ?? "저장하지 못했습니다."
                 return
             }
             onSaved(id)
-            dismiss()
+
+            // **노선 자료를 못 찾은 버스 구간이 있으면 말하고 닫지 않는다.**
+            //
+            // 저장은 성공했고 경로는 쓸 수 있다. 다만 그 구간의 선은 실제 노선이
+            // 아니라 자동차 길이다 — 가족 지도에 그려질 모양이 실제로 버스가 가는
+            // 길과 다르다. 조용히 닫으면 그 사실이 아무 데도 남지 않는다.
+            if plotted.busFallbacks.isEmpty {
+                dismiss()
+            } else {
+                let numbers = plotted.busFallbacks.joined(separator: ", ")
+                notice = "저장했습니다. 다만 \(numbers)번 노선 자료를 못 찾아 그 구간은"
+                    + " 자동차 경로로 그렸습니다 — 지도의 선 모양이 실제 노선과 다를 수 있어요."
+            }
         } catch {
             failure = error.localizedDescription
         }

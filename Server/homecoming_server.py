@@ -165,7 +165,7 @@ SESSION_RETENTION_HOURS = 24
 # 2026-08-19 에 실제로 그렇게 됐다(`이미 진행 중인 세션 2a7a3c973cef 재사용`).
 # 그날 오후에 시험으로 열어 둔 세션이 그대로 살아 있었다.
 #
-# 6시간인 이유 — 어떤 퇴근도 이보다 길지 않다(이 경로가 82분이다). 그리고 하루보다
+# 6시간인 이유 — 어떤 귀가도 이보다 길지 않다(이 경로가 82분이다). 그리고 하루보다
 # 짧아야 "어제 세션이 오늘 재사용" 을 막는다.
 SESSION_REUSE_MAX_HOURS = 6
 
@@ -1516,7 +1516,7 @@ def route_shape_for(session):
 def route_remaining(legs, progress):
     """지금 진행(초)에서 경로 끝까지 남은 거리(m).
 
-    **직선거리를 쓰면 안 되는 이유가 이 앱에 특히 크다.** 이 퇴근길은 집 쪽으로
+    **직선거리를 쓰면 안 되는 이유가 이 앱에 특히 크다.** 이 귀가 경로는 집 쪽으로
     곧장 가지 않는다 — 여의도에서 신촌으로 동북쪽으로 갔다가 서북쪽 일산으로
     꺾는다. 환승로터리에서 서강대역까지 7분 걷는 동안 집에는 300m 밖에 가까워지지
     않는다. 직선으로 재면 진행 바가 한참 멈춰 있다가 갑자기 뛴다.
@@ -1769,7 +1769,7 @@ def recompute(session, lat, lon, at):
                 transport = transport_of(route["legs"], index) or transport
                 remaining_seconds = route["total_seconds"] + delay - elapsed
                 arrival = now() + timedelta(seconds=max(30, remaining_seconds))
-                # 남은거리도 경로에서 온다. 직선으로 재면 이 퇴근길처럼 집 쪽으로
+                # 남은거리도 경로에서 온다. 직선으로 재면 이 경로처럼 집 쪽으로
                 # 곧장 가지 않는 경로에서 진행 바가 한참 멈춰 있다가 갑자기 뛴다.
                 route_left = route_remaining(route["legs"], progress)
 

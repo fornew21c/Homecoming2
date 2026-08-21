@@ -7,7 +7,7 @@ import Foundation
 /// 탭을 넣을 수단이 없다. 그래서 화면이 부르는 것과 같은 코드(`RouteTracer` →
 /// `RouteStore.save`)를 인자로도 부를 수 있게 둔다.
 ///
-/// 좌표는 실제 퇴근 경로이고, 앱의 장소 검색이 준 값이다. 예전에는 지오코딩이
+/// 좌표는 실제 귀가 경로이고, 앱의 장소 검색이 준 값이다. 예전에는 지오코딩이
 /// 실패해서 손으로 짐작한 값을 썼는데 **풍산역이 2km 어긋나 있었다.**
 /// `Tools/routes/commute-sample.json` 도 그 값으로 만들어져 있었다.
 @MainActor
@@ -45,7 +45,12 @@ enum RouteSample {
                 await environment.routes.busWaypoints(no: no, from: from,
                                                      fromName: fromName, toName: toName)
             }
-            let legs = try await tracer.plot(origin: origin, steps: steps)
+            let plotted = try await tracer.plot(origin: origin, steps: steps)
+            let legs = plotted.legs
+            if !plotted.busFallbacks.isEmpty {
+                print("[귀가마중] 노선 자료 없음 — 자동차 경로로 그린 버스: "
+                      + plotted.busFallbacks.joined(separator: ", "))
+            }
             for leg in legs {
                 print("[귀가마중] 구간 \(leg.mode.rawValue) \(leg.seconds)초 "
                       + "startsAt=\(leg.startsAt) 점 \(leg.points.count) → \(leg.toName ?? "-")")
@@ -63,7 +68,7 @@ enum RouteSample {
         }
     }
 
-    /// 실제 퇴근 경로에 나오는 이름들로 장소 검색을 시험한다.
+    /// 실제 귀가 경로에 나오는 이름들로 장소 검색을 시험한다.
     ///
     /// 고르는 이름에 뜻이 있다. 지하철역(서강대역)·버스정류장(환승로터리)·
     /// 아파트 단지(아파트단지)는 각각 다른 종류의 장소이고, 정류장 이름이 제일

@@ -335,7 +335,7 @@ struct RouteCard: View {
     }
 
     /// 흔한 값. 30분(가까운 회식)에서 90분(먼 곳)까지가 이 앱이 실제로 다뤄 온 폭이다
-    /// — 저장된 퇴근 경로가 79~82분이다.
+    /// — 저장된 귀가 경로가 79~82분이다.
     private static let presets = [20, 30, 45, 60, 90]
     private static let step = 5
     private static let maximum = 480

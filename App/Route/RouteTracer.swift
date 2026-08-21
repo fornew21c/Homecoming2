@@ -92,9 +92,22 @@ struct RouteTracer {
     var busWaypoints: ((_ no: String, _ from: CLLocationCoordinate2D,
                         _ fromName: String, _ toName: String) async -> [CLLocationCoordinate2D])?
 
-    func plot(origin: CLLocationCoordinate2D, steps: [Step]) async throws -> [RouteLeg] {
+    /// 그린 결과. **폴백을 함께 돌려준다.**
+    ///
+    /// 버스 노선 자료를 못 찾으면 자동차 경로로 그린다. 그건 "없는 길을 그리는 것"
+    /// 보다 나은 선택이지만, **조용하면 안 된다** — 저장된 선의 모양이 실제 노선과
+    /// 다르고, 그 사실은 저장한 사람만 알 수 있다(자료가 없는 지역은
+    /// 서버 `BUS_SGG` 주석에 적혀 있다). 화면이 말할 수 있게 여기서 들고 나간다.
+    struct Plotted {
+        var legs: [RouteLeg]
+        /// 실제 노선을 못 찾아 자동차 경로로 그린 버스 구간의 노선번호.
+        var busFallbacks: [String] = []
+    }
+
+    func plot(origin: CLLocationCoordinate2D, steps: [Step]) async throws -> Plotted {
         guard !steps.isEmpty else { throw TraceError.noSteps }
 
+        var fallbacks: [String] = []
         var legs: [RouteLeg] = []
         var cursor = origin
         var startsAt = 0
@@ -114,8 +127,13 @@ struct RouteTracer {
                 guard let destination = step.to else {
                     throw TraceError.missingCoordinate(step.toName.isEmpty ? step.mode.title : step.toName)
                 }
-                points = try await trace(step, from: cursor, to: destination,
-                                         fromName: previousName)
+                let traced = try await trace(step, from: cursor, to: destination,
+                                             fromName: previousName)
+                points = traced.points
+                if traced.fellBack, let no = step.busNo?.trimmingCharacters(in: .whitespaces),
+                   !no.isEmpty {
+                    fallbacks.append(no)
+                }
                 cursor = destination
             }
 
@@ -133,27 +151,37 @@ struct RouteTracer {
             }
         }
 
-        return legs
+        return Plotted(legs: legs, busFallbacks: fallbacks)
     }
 
     /// 구간 하나의 좌표열. 버스에 노선번호가 있으면 그 노선을 따라 그린다.
+    ///
+    /// `fellBack` 은 **버스 노선을 따라 그리려 했는데 자료가 없어 자동차 경로로
+    /// 대신 그렸다**는 뜻이다. 노선번호가 없는 버스나 다른 수단은 애초에 노선을
+    /// 따라 그릴 대상이 아니므로 false 다.
     private func trace(
         _ step: Step,
         from: CLLocationCoordinate2D,
         to: CLLocationCoordinate2D,
         fromName: String
-    ) async throws -> [[Double]] {
+    ) async throws -> (points: [[Double]], fellBack: Bool) {
 
         guard step.mode == .bus, let no = step.busNo?.trimmingCharacters(in: .whitespaces),
               !no.isEmpty, let ask = busWaypoints
         else {
-            return try await line(step.mode, from: from, to: to, label: step.toName)
+            return (try await line(step.mode, from: from, to: to, label: step.toName), false)
         }
 
         let stops = await ask(no, from, fromName, step.toName)
         guard !stops.isEmpty else {
-            // 노선을 못 찾았다(서울 시내버스는 이 자료에 없다). 예전처럼 그린다.
-            return try await line(step.mode, from: from, to: to, label: step.toName)
+            // 노선을 못 찾았다(서울 시내버스는 이 자료에 없고, 경기도 시군구 코드도
+            // 확인된 것만 서버가 들고 있다). 예전처럼 자동차 경로로 그린다.
+            //
+            // **이 사실을 들고 나간다.** 예전에는 여기에 로그도 없어서, 저장된 선이
+            // 실제 노선이 아닌 것을 아무도 알 수 없었다.
+            HomecomingLog.push.warning(
+                "버스 \(no, privacy: .public) 노선 자료가 없다 — 자동차 경로로 그린다")
+            return (try await line(step.mode, from: from, to: to, label: step.toName), true)
         }
 
         // **정류장을 직접 잇는다. 사이를 도로 경로로 채우지 않는다.**
@@ -176,7 +204,7 @@ struct RouteTracer {
         }
         HomecomingLog.push.notice(
             "버스 \(no, privacy: .public) 구간을 실제 노선으로 그렸다 · 경유 \(stops.count)곳 · 점 \(line.count)개")
-        return line
+        return (line, false)
     }
 
     // MARK: - 구간 하나

@@ -263,19 +263,6 @@ struct ContentView: View {
         if coordinator.home == nil { return "경로 탭에서 집 위치를 먼저 등록해 주세요." }
         return "경로 탭에서 경로를 고르거나, `경로 없이` 를 고른 뒤 예상 소요시간을 적어 주세요."
     }
-
-    private var header: some View {
-        VStack(spacing: 6) {
-            Text("귀가 마중")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-            Text("귀가 과정을 가족에게 실시간으로")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.5))
-        }
-        .padding(.top, 24)
-    }
-
     /// 지금 알림이 돌고 있는가. `귀가` 탭에 남는 유일한 조종석이다.
     ///
     /// 이름·진단은 `설정` 탭으로 옮겼다 — 한 카드에 성격이 다른 셋이 섞여
