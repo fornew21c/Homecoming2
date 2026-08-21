@@ -325,13 +325,23 @@ struct HomecomingJourneyMap: View {
     /// 왔는지가 "이 사람이 지금 어느 길에 있나" 를 읽는 데 쓰인다.
     private static let passedColor = Color(white: 0.62).opacity(0.6)
 
-    /// 선 굵기와 점선 여부. 도보만 점선이고, **지나온 길은 얇다.**
+    /// 선 굵기와 점선 여부. 도보는 점, 탈것은 실선이고, **지나온 길은 얇다.**
     ///
     /// 색상에 굵기를 한 번 더 얹는다. 색만으로 가르면 색약인 사람에게는 갈리지
     /// 않는다 — 굵기는 색과 무관하게 읽힌다.
+    ///
+    /// **도보는 동그란 점으로 그린다.** 길이가 0 에 가까운 dash 에 둥근 끝을 주면
+    /// 지름이 선 굵기와 같은 점이 된다. 예전에는 `dash: [2, 6]` 에 굵기 5 였는데,
+    /// 둥근 끝이 양쪽으로 굵기의 절반씩 더 붙어 각 점이 **길이 7pt · 폭 5pt 의
+    /// 뭉툭한 알약**이 됐다(2026-08-21 화면에서 그렇게 보였다). 도보는 탈것보다
+    /// 가벼운 구간이라 얇은 것이 뜻에도 맞는다.
     private static func stroke(walk: Bool, passed: Bool) -> StrokeStyle {
-        StrokeStyle(lineWidth: passed ? 3 : 5, lineCap: .round, lineJoin: .round,
-                    dash: walk ? [2, 6] : [])
+        guard walk else {
+            return StrokeStyle(lineWidth: passed ? 3 : 5, lineCap: .round, lineJoin: .round)
+        }
+        let width: CGFloat = passed ? 2.5 : 3.5
+        return StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round,
+                           dash: [0.01, width * 2.2])
     }
 
     // MARK: - 진행도로 자르기
