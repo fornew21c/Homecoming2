@@ -5,8 +5,10 @@
 
 ## 먼저 읽을 것
 
+- **[`docs/HANDOFF-2026-08-21.md`](docs/HANDOFF-2026-08-21.md)** — **여기서 시작한다.**
+  다음 작업 순서, 어제 한 일, 그날 새로 걸린 함정(공공데이터 일일 한도 1,000회 등)
 - **[`docs/HANDOFF-2026-08-20.md`](docs/HANDOFF-2026-08-20.md)** — 배포 정보, 이 환경의
-  함정(사내망 TLS 등), 지금까지 한 일, 정리 안 한 것
+  함정(사내망 TLS 등), 그 전까지 한 일
 - **[`docs/superpowers/specs/2026-08-20-progress-unification-design.md`](docs/superpowers/specs/2026-08-20-progress-unification-design.md)**
   — 카드와 지도의 진행도를 한 벌로 합쳤다(구현·검증 완료). 진행도를 건드리기 전에 읽는다
 
