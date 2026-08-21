@@ -189,10 +189,21 @@ struct HomecomingJourneyMap: View {
                         .tint(.orange)
                 }
             }
-            // 경로를 그리면 200pt 로는 좁다 — 28km 여정이 손톱만 하게 눌린다.
             // 시설 표시를 켜 둔다. 정류장 주변이 어떤 곳인지 같이 읽힌다.
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .all))
-            .frame(height: 300)
+            // **높이를 화면에 비례하게 잡는다.**
+            //
+            // 200pt 로는 28km 여정이 손톱만 하게 눌렸고, 300pt 고정으로 올렸더니
+            // 큰 화면에서는 아직 좁았다. 그런데 고정값을 더 키우면 작은 화면에서
+            // **이 지도 아래**가 밀려 내려간다 — 상태 카드·이번 귀가 요약·시작
+            // 버튼이 그 아래다. 카드(`HomecomingJourneyCard`)는 이 뷰 **위**에
+            // 있어서 지도가 커져도 자리가 그대로다.
+            //
+            // 그래서 보이는 높이의 46% 로 잡고 양 끝을 자른다. `containerRelativeFrame`
+            // 이 재는 것은 스크롤 컨테이너의 보이는 높이다(iOS 17+).
+            .containerRelativeFrame(.vertical) { height, _ in
+                min(max(height * 0.46, 300), 460)
+            }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
