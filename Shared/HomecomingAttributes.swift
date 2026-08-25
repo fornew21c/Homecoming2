@@ -825,3 +825,24 @@ extension HomecomingAttributes.ContentState {
         )
     }
 }
+
+extension String {
+
+    /// 이름 뒤에 붙는 조사를 고른다. **받침이 있으면 `이`, 없으면 `가`.**
+    ///
+    /// `"\(name)이 도착했어요"` 로 박아 두었더니 알림이 `아빠이 집에 도착했어요` 로
+    /// 떴다(2026-08-25). 이름은 사용자가 적는 값이라 받침이 있는지 미리 알 수 없다.
+    ///
+    /// 서버의 `은는이가()` 와 **같은 규칙이다** — 같은 문장을 서버가 만들 때도 있고
+    /// (가족 폰 알림) 앱이 만들 때도 있어서(귀가자 폰 알림), 두 곳이 갈리면 같은
+    /// 사건이 기기마다 다른 문장으로 뜬다.
+    ///
+    /// 한글 음절만 정확히 가른다 — `(코드 - 0xAC00) % 28` 이 0 이 아니면 받침이 있다.
+    /// 한글이 아닌 끝글자(영문·숫자·기호)는 받침 없음으로 본다.
+    var 이가: String {
+        guard let last = trimmingCharacters(in: .whitespaces).unicodeScalars.last,
+              (0xAC00...0xD7A3).contains(last.value)
+        else { return self + "가" }
+        return self + ((last.value - 0xAC00) % 28 == 0 ? "가" : "이")
+    }
+}

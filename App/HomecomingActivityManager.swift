@@ -280,7 +280,7 @@ final class HomecomingActivityManager {
         if state.stage == .nearby && previous.stage != .nearby {
             return AlertConfiguration(
                 title: "곧 도착",
-                body: LocalizedStringResource(stringLiteral: "\(name)이 \(state.remainingDistanceText) 앞이에요"),
+                body: LocalizedStringResource(stringLiteral: "\(name.이가) \(state.remainingDistanceText) 앞이에요"),
                 sound: .default
             )
         }
@@ -362,7 +362,7 @@ final class HomecomingActivityManager {
             content,
             alertConfiguration: AlertConfiguration(
                 title: "도착",
-                body: "\(activity.attributes.travelerName)이 \(activity.attributes.destinationName)에 도착했어요",
+                body: "\(activity.attributes.travelerName.이가) \(activity.attributes.destinationName)에 도착했어요",
                 sound: .default
             )
         )

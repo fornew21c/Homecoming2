@@ -1235,6 +1235,24 @@ def attributes_for(session, audience, route_shape):
 
 # --------------------------------------------------------- 가족에게 보내기
 
+def 은는이가(name, 받침있음="이", 받침없음="가"):
+    """이름 뒤에 붙는 조사를 고른다. **받침이 있으면 `이`, 없으면 `가`.**
+
+    `f"{이름}이 집으로..."` 로 박아 두었더니 가족 폰 알림이 `아빠이 집으로
+    출발했어요` 로 떴다(2026-08-25). 이름은 사용자가 적는 값이라 받침이 있는지
+    없는지 미리 알 수 없다.
+
+    한글 음절만 정확히 가른다 — 유니코드에서 `(코드 - 0xAC00) % 28` 이 0 이 아니면
+    받침이 있다. 한글이 아닌 끝글자(영문·숫자·기호)는 받침 없음으로 본다. 짐작으로
+    가르면 `Tom` 같은 이름에서 틀리는데, 그건 여기서 풀 문제가 아니다.
+    """
+    if not name:
+        return name
+    last = name.strip()[-1]
+    if "가" <= last <= "힣":
+        return name + (받침있음 if (ord(last) - 0xAC00) % 28 else 받침없음)
+    return name + 받침없음
+
 def watchers_of(traveler):
     return db().execute("SELECT * FROM links WHERE traveler = ?", (traveler,)).fetchall()
 
@@ -1266,7 +1284,7 @@ def start_activity_for(session, link, state=None, route_shape=None):
             "attributes": attributes_for(session, "watcher", route_shape),
             "alert": {
                 "title": "귀가 시작",
-                "body": f"{session['traveler_name']}이 집으로 출발했어요",
+                "body": f"{은는이가(session['traveler_name'])} 집으로 출발했어요",
             },
         }
     }
@@ -1346,9 +1364,9 @@ def end_activities(session):
     alert = {
         "title": "도착" if arrived else "공유 중지",
         "body": (
-            f"{session['traveler_name']}이 {session['home_name']}에 도착했어요"
+            f"{은는이가(session['traveler_name'])} {session['home_name']}에 도착했어요"
             if arrived
-            else f"{session['traveler_name']}이 위치 공유를 껐어요"
+            else f"{은는이가(session['traveler_name'])} 위치 공유를 껐어요"
         ),
     }
 
@@ -2709,7 +2727,7 @@ class Handler(BaseHTTPRequestHandler):
         if session["stage"] == "nearby" and previous_stage != "nearby":
             alert = {
                 "title": "곧 도착",
-                "body": f"{session['traveler_name']}이 {int(session['remaining_meters'])}m 앞이에요",
+                "body": f"{은는이가(session['traveler_name'])} {int(session['remaining_meters'])}m 앞이에요",
             }
         update_activities(session, alert)
         return self.reply(200, {"ok": True})
