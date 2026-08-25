@@ -64,9 +64,13 @@ struct HomecomingJourneyCard: View {
                         .minimumScaleFactor(0.6)
                     // 공유를 껐으면 도착 예정 시각은 더 이상 아무 뜻이 없다.
                     if !state.isStopped {
-                        Text("\(state.arrivalClockText) 도착")
+                        Text(state.arrivalClockLine)
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.45))
+                            // `도착 예정` 이 붙어 세 글자 길어졌다. 좁은 화면에서
+                            // 두 줄로 접히면 카드 높이가 흔들린다.
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
             }

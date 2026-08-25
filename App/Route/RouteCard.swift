@@ -267,7 +267,7 @@ struct RouteCard: View {
                 if let minutes = plannedMinutes {
                     // 도착 시각을 같이 보여 준다. 분만 적으면 몇 시에 닿는지
                     // 머리로 더해야 하고, 가족이 보는 것은 그 시각이다.
-                    Text("\(Self.clockText(minutesFromNow: minutes)) 도착")
+                    Text("\(Self.clockText(minutesFromNow: minutes)) 도착 예정")
                         .font(.system(size: 12))
                         .foregroundStyle(accent.opacity(0.9))
                 }

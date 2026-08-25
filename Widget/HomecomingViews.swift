@@ -87,9 +87,11 @@ struct HomecomingLockScreenView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                     if !state.isStopped {
-                        Text("\(state.arrivalClockText) 도착")
+                        Text(state.arrivalClockLine)
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.5))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
             }
@@ -196,9 +198,11 @@ enum HomecomingIsland {
                 CountdownText(state: state, font: .system(size: 20, weight: .semibold, design: .rounded))
                 // 도착 후에도 같은 형식을 쓴다. 예정 시각이 실제 시각으로 바뀔 뿐이다.
                 if !state.isStopped {
-                    Text("\(state.arrivalClockText) 도착")
+                    Text(state.arrivalClockLine)
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
             .padding(.trailing, 10)

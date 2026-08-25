@@ -587,6 +587,22 @@ extension HomecomingAttributes.ContentState {
         Self.clockFormatter.string(from: expectedArrival)
     }
 
+    /// 시각 뒤에 붙는 말까지 붙인 한 줄. **`도착` 만 적으면 안 된다.**
+    ///
+    /// 가는 중에 `18:30 도착` 이라고 적혀 있으면 "18:30에 도착 예정" 이 아니라
+    /// **"18:30에 도착했다"** 로 읽힌다. 2026-08-25 실주행에서 가족이 그렇게 읽고
+    /// 도착한 줄 알았다 — 그때 서버는 `moving · 3126m` 을 밀고 있었고 실제 도착은
+    /// 18:48 이었다.
+    ///
+    /// **도착한 뒤에는 `예정` 을 떼야 한다.** 그때는 이 값이 예정이 아니라 실제로
+    /// 닿은 시각이기 때문이다(도착 처리에서 `expectedArrival` 이 그 시각으로 바뀐다).
+    ///
+    /// 카드·잠금화면·아일랜드가 이 한 줄을 같이 쓴다. 세 화면이 같은 값을 다르게
+    /// 적으면 "가족에게 이렇게 보인다" 는 확인이 거짓말이 된다.
+    var arrivalClockLine: String {
+        "\(arrivalClockText) \(stage.isFinished ? "도착" : "도착 예정")"
+    }
+
     /// 도착예정이 이미 지났다. **그리는 그 순간의 판정이다.**
     var isOverdue: Bool { expectedArrival <= Date() }
 
