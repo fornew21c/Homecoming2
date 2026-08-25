@@ -179,9 +179,15 @@ struct ContentView: View {
     private var settingsTab: some View {
         nameCard
         permissionCard
-        // 안전귀가 모드는 지금 숨겨 둔다. 지연·정지·무응답 감시가 다 붙어 있지만
-        // 화면에 내놓기 전에 정리할 것이 남았다. `safetyCard` 를 여기 되돌리면
-        // 그대로 살아난다 — 코드는 지우지 않았다.
+        // **안전귀가 모드는 이 토글이 유일한 스위치다.** 화면에서 빼 두었던 동안
+        // `safetyMode` 는 `UserDefaults` 기본값 `false` 에 고정이었고, 켜는 길은
+        // `-homecomingSafetyMode on` 런치 인자뿐이었다 — 즉 감시가 전부 꺼져 있었다.
+        //
+        // 이 토글이 켜는 것은 앱 안의 감시 셋이다: 지연·정지·무응답
+        // (`SafetyWatch.anomaly`). **이탈은 여기 없다** — 경로 폴리라인이 필요해서
+        // 서버가 판정하고(`estimateSource: "offRoute"`), 지도는 이 토글과 무관하게
+        // 그 줄을 적는다.
+        safetyCard
         diagnosticsCard
         pushCard
         hint
