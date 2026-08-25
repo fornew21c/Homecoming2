@@ -1201,7 +1201,8 @@ def content_state(session):
     # 이탈해 직선거리로 되돌아간 것은 모른다. 진단 화면이 `저장된 경로 (실측)` 이라고
     # 끝까지 적고 있었던 이유다(2026-08-18).
     #   route    — 저장된 경로를 따라 쟀다
-    #   offRoute — 경로는 있는데 지금 벗어나 있어 직선거리로 짐작한다
+    #   offRoute — 경로는 있는데 지금 벗어나 있다. **남은거리만** 직선이다 —
+    #              도착예정은 경로의 시간 예산에서 그대로 나온다(2026-08-25)
     #   distance — 경로 없이 시작한 귀가다
     # 뒤의 둘을 뭉치면 "왜 직선거리인가" 를 화면에서 가릴 수 없다.
     if not session["route_id"]:
@@ -1796,6 +1797,10 @@ def recompute(session, lat, lon, at):
     # 부정확해도 도착예정이 흔들리지 않는다. 애초에 위치로 나누는 게 아니다.
     route = route_of(session)
     route_left = None
+    # **못 구했으면 None 이다.** 예전에는 초기화가 없어서, 아래 폴백이 `route_left`
+    # 가 None 인지로 "도착예정을 구했는가" 를 대신 판단했다. 둘은 이제 다른 질문이다 —
+    # 이탈하면 남은거리는 경로에서 못 구해도(`route_left is None`) 도착예정은 구한다.
+    arrival = None
     delay = session["delay_seconds"]
     off_route = bool(session["off_route"])
     progress = session["route_progress"]
@@ -1821,7 +1826,8 @@ def recompute(session, lat, lon, at):
                     log(f"  경로 복귀 {int(gap)}m — 저장된 경로로 다시 잰다")
             elif gap > OFF_ROUTE_METERS:
                 off_route = True
-                log(f"  경로 이탈 {int(gap)}m — 거리 기반 추정으로 되돌린다")
+                log(f"  경로 이탈 {int(gap)}m — 남은거리만 직선으로 잰다"
+                    f"(도착예정은 경로의 시간 예산 그대로)")
 
             if not off_route:
                 # 경로 진행은 뒤로 가지 않는다. GPS 가 흔들려서 가장 가까운 좌표가
@@ -1839,12 +1845,36 @@ def recompute(session, lat, lon, at):
                 # 남은거리도 경로에서 온다. 직선으로 재면 이 경로처럼 집 쪽으로
                 # 곧장 가지 않는 경로에서 진행 바가 한참 멈춰 있다가 갑자기 뛴다.
                 route_left = route_remaining(route["legs"], progress)
+            else:
+                # **이탈해도 도착예정은 경로에서 낸다.**
+                #
+                # 이 값은 `총소요시간 + 지연 − 경과시간` 이라 **위치를 아예 안 쓴다.**
+                # 위치가 벗어났다고 시간 계산까지 버릴 이유가 없다.
+                #
+                # 2026-08-25 실주행이 그 근거다. 18:09 에 1,105m 로 이탈해 도착까지
+                # 39분을 직선거리 추정으로 돌았는데 —
+                #
+                #   저장된 경로의 예정  18:54   ← 실제 도착 18:48:39 과 6분 차이
+                #   직선 폴백의 예정    ~18:30  ← 18분 차이
+                #
+                # 폴백이 더 나쁜 값으로 덮었다. 게다가 그 값이 앞당겨지면서 가족이
+                # 도착한 줄 알았다.
+                #
+                # 남은거리는 그대로 직선이다(`route_left` 를 안 채운다). 경로 위
+                # 어디인지 모르는 채로 경로 거리를 말하면 그게 거짓이 된다 —
+                # 시간은 경과로 알 수 있지만 자리는 알 수 없다. `travelledMeters` 도
+                # 같은 이유로 그 자리에 선다.
+                #
+                # `delay` 는 마지막으로 경로 위에 있었을 때 값에 멈춰 있다. 이탈
+                # 중에는 갱신할 근거가 없으니 그게 맞다.
+                arrival = now() + timedelta(
+                    seconds=max(30, route["total_seconds"] + delay - elapsed))
 
     # **경로값을 못 구했으면 폴백이다.** 조건이 `not route or off_route` 였는데,
     # 경로에 좌표가 없어 `where_on_route` 가 None 을 주는 경우에는 두 블록 다 건너뛰어
     # `arrival` 이 정의되지 않은 채 아래로 내려갔다. 실제로 못 만든 값을 기준으로
     # 판단하는 게 맞다.
-    if route_left is None and session["planned_seconds"]:
+    if arrival is None and session["planned_seconds"]:
         # **귀가자가 적은 시간이 도착예정이다.** 출발 시각 + 그 시간. 저장된 경로의
         # `total_seconds` 를 쓰는 것과 같은 자리다 — 추정이 아니라 아는 값이라
         # 위치로 흔들지 않는다.
@@ -1854,7 +1884,7 @@ def recompute(session, lat, lon, at):
         # 시각을 덮으면, 물어본 뜻이 없어진다.
         started_at = parse_iso(session["started_at"]) or now()
         arrival = started_at + timedelta(seconds=int(session["planned_seconds"]))
-    elif route_left is None:
+    elif arrival is None:
         # 폴백 — 저장된 경로도 없고 적어 둔 시간도 없다. 관측 접근 속도로 짐작한다.
         # 여기서 도착예정이 크게 튀는 걸 막는 게 MIN_OBSERVED_SPEED 와 ETA_OBSERVED_LIMIT 다.
         flat = straight / (TRANSPORT_SPEED[transport] / 60)

@@ -121,6 +121,37 @@ class OffRouteHysteresis(unittest.TestCase):
         self.assertEqual(row["off_route"], 0, "복귀 문턱 안으로 들어왔으면 풀려야 한다")
         self.assertIsNotNone(row["detail"], "복귀했으면 구간 문구가 다시 나와야 한다")
 
+    def test_이탈해도_도착예정은_경로의_시간_예산에서_온다(self):
+        """**2026-08-25 실주행에서 이걸로 가족이 도착한 줄 알았다.**
+
+        직선거리 폴백은 도착예정을 크게 앞당긴다 — 그날 저장된 경로의 예정
+        (18:54)은 실제 도착(18:48)과 6분 차이였는데, 폴백은 18분 틀렸다.
+        도착예정은 `총소요시간 + 지연 − 경과시간` 이라 위치를 안 쓴다.
+        """
+        on_route = self.step(37.5500, 126.9200)
+        self.assertEqual(on_route["off_route"], 0)
+
+        # 경로에서 한참 벗어난다. 집에 **더 가까운** 쪽으로 벗어나는 것이 요점이다 —
+        # 직선거리로 재면 도착예정이 확 당겨지는 자리다.
+        off = self.step(HOME[0] - 0.01, HOME[1])
+        self.assertEqual(off["off_route"], 1)
+
+        # `elapsed` 는 측정 시각(`at`)으로 재고, 도착예정은 **벽시계**에서 더한다 —
+        # 경로 위에 있을 때와 같은 규칙이다.
+        elapsed = (self.at - hs.parse_iso(self.session["started_at"])).total_seconds()
+        expected = hs.now() + timedelta(
+            seconds=max(30, 1800 + off["delay_seconds"] - elapsed))
+        gap = abs((hs.parse_iso(off["expected_arrival"]) - expected).total_seconds())
+        self.assertLess(gap, 5, "이탈해도 경로의 시간 예산으로 내야 한다")
+
+    def test_이탈하면_남은거리는_직선으로_잰다(self):
+        """도착예정과 달리 **남은거리는 경로에서 못 낸다.** 경로 위 어디인지
+        모르는 채로 경로 거리를 말하면 거짓이다."""
+        self.step(37.5500, 126.9200)
+        off = self.step(HOME[0] - 0.01, HOME[1])
+        straight = hs.haversine(HOME[0] - 0.01, HOME[1], HOME[0], HOME[1])
+        self.assertAlmostEqual(off["remaining_meters"], int(straight), delta=5)
+
     def test_이탈_문턱과_복귀_문턱_사이에서는_이탈을_유지한다(self):
         """경계에서 깜박이지 않는다 — 이력(hysteresis)이 있다."""
         self.assertLess(hs.OFF_ROUTE_REJOIN_METERS, hs.OFF_ROUTE_METERS)
