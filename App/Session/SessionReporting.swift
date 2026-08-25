@@ -16,7 +16,12 @@ protocol SessionReporting: Sendable {
     func start(_ request: SessionStartRequest) async throws -> String
 
     /// 위치 보고. 서버가 ETA·도착을 판정하고 가족 화면을 갱신한다.
+    /// 위치를 보내고, **서버가 그 자리로 다시 계산한 상태를 받아 온다.**
+    ///
+    /// 돌려주는 값이 nil 이면 서버가 상태를 안 줬다는 뜻이다(옛 서버이거나
+    /// 도착 처리로 세션이 닫힌 경우). 그때는 지금까지처럼 푸시를 기다린다.
     func report(sessionID: String, location: SessionLocation) async throws
+        -> HomecomingAttributes.ContentState?
 
     /// 도착했거나 사용자가 껐다.
     func end(sessionID: String, reason: SessionEndReason) async throws
@@ -118,8 +123,13 @@ struct RemoteSessionReporter: SessionReporting {
         return response.sessionId
     }
 
-    func report(sessionID: String, location: SessionLocation) async throws {
-        _ = try await post("session/\(sessionID)/location", body: location)
+    func report(sessionID: String, location: SessionLocation) async throws
+        -> HomecomingAttributes.ContentState? {
+        let data = try await post("session/\(sessionID)/location", body: location)
+        // **못 읽어도 실패가 아니다.** 위치는 이미 닿았고, 상태는 덤이다.
+        // 이 필드를 모르는 서버도 있고, 도착으로 세션이 닫히면 안 온다.
+        struct Response: Decodable { let state: HomecomingAttributes.ContentState? }
+        return try? JSONDecoder().decode(Response.self, from: data).state
     }
 
     func end(sessionID: String, reason: SessionEndReason) async throws {
@@ -157,7 +167,8 @@ struct LocalOnlySessionReporter: SessionReporting {
         return "local"
     }
 
-    func report(sessionID: String, location: SessionLocation) async throws {}
+    func report(sessionID: String, location: SessionLocation) async throws
+        -> HomecomingAttributes.ContentState? { nil }
     func end(sessionID: String, reason: SessionEndReason) async throws {}
 }
 

@@ -288,6 +288,39 @@ final class HomecomingActivityManager {
         return nil
     }
 
+    /// **서버가 방금 계산해 준 상태를 그대로 받는다.**
+    ///
+    /// 위치를 보고하면 그 응답에 지금 상태가 실려 온다. 그 값의 주인은 서버다 —
+    /// 경로 위 어디인지, 남은거리가 얼마인지, 이탈했는지는 서버만 안다.
+    ///
+    /// **`update(...)` 와 다른 함수인 이유.** 그쪽은 "앱이 아는 것만 넘기고 나머지는
+    /// 그대로 둔다" 는 계약이라 서버 값을 못 만든다. 이건 반대로 서버 값을 통째로
+    /// 받아 앉히는 자리다. 둘을 한 함수로 합치면 nil 의 뜻이 두 개가 된다.
+    ///
+    /// **앱만 아는 둘은 지킨다.** 서버는 안심 확인도 이상 상황도 모른다
+    /// (`homecoming_server.py` 에 `check_in` 도 `anomaly` 도 없다). 통째로 앉히면
+    /// 방금 누른 확인이 사라지고 화면의 이상 표시가 꺼진다.
+    ///
+    /// 이게 있어야 귀가자 폰이 푸시를 기다리지 않는다. 예전에는 좌표만 자기가 쓰고
+    /// 남은거리·진행도는 푸시로만 받아서, 푸시가 늦으면 한 화면 안에서 어긋났다 —
+    /// 점은 지금 자리인데 남은거리는 몇 분 전 것이었다(2026-08-21 14:41 실주행).
+    func adopt(_ incoming: HomecomingAttributes.ContentState) async {
+        guard let activity else { return }
+        let previous = activity.content.state
+
+        var state = incoming
+        state.checkInDeadline = previous.checkInDeadline
+        state.anomaly = previous.anomaly
+
+        // 값이 그대로면 밀지 않는다. 같은 값을 계속 밀면 아일랜드가 계속 펼쳐지고
+        // 갱신 예산만 먹는다(`refreshAnomaly` 가 같은 이유로 그렇게 한다).
+        guard state != previous else { return }
+
+        await activity.update(ActivityContent(state: state, staleDate: state.staleDate))
+        HomecomingLog.activity.debug(
+            "서버 상태 반영 stage=\(state.stage.rawValue, privacy: .public) 남은=\(state.remainingMeters)m")
+    }
+
     // MARK: - 안심 확인
 
     /// 앱 안에서 확인을 누른 경우. 잠금화면 버튼과 같은 구현을 탄다.

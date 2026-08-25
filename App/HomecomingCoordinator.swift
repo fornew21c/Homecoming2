@@ -417,7 +417,14 @@ final class HomecomingCoordinator {
         lastReportedAt = Date()
 
         do {
-            try await sessions.report(sessionID: sessionID, location: SessionLocation(location))
+            // **응답에 실려 온 상태를 바로 앉힌다.** 이 폰은 남은거리·진행도를
+            // 푸시로만 받아서, 늦으면 자기 GPS 로 찍은 점과 어긋났다. 보고가 이미
+            // 오가는 요청이니 그 응답으로 따라잡는다 — 푸시는 그대로 두고,
+            // 늦게 오면 같은 값이라 `adopt` 가 알아서 건너뛴다.
+            if let state = try await sessions.report(
+                sessionID: sessionID, location: SessionLocation(location)) {
+                await activity.adopt(state)
+            }
         } catch SessionError.gone {
             // 서버가 이 세션을 끝냈다. 붙잡고 있으면 위치를 영영 죽은 곳으로 보내고
             // 가족은 아무것도 못 본다. ID 를 버리고 새로 연다 — 귀가는 계속 중이니까.

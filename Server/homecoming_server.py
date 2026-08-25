@@ -2730,7 +2730,21 @@ class Handler(BaseHTTPRequestHandler):
                 "body": f"{은는이가(session['traveler_name'])} {int(session['remaining_meters'])}m 앞이에요",
             }
         update_activities(session, alert)
-        return self.reply(200, {"ok": True})
+        # **보고한 폰에게 지금 상태를 되돌려 준다.**
+        #
+        # 귀가자 폰은 남은거리·진행도를 오직 APNs 푸시로만 받는다. 좌표는 자기
+        # GPS 로 쓰면서 나머지는 기다리는 것이라, 푸시가 늦으면 **한 화면 안에서
+        # 어긋난다** — 점은 지금 자리인데 남은거리는 몇 분 전 것이 된다
+        # (2026-08-21 14:41 실주행: 화면 3.2km, 그때 서버는 2,093m).
+        #
+        # 그런데 이 요청이 이미 오가고 있다. 여기에 상태를 실으면 보고할 때마다
+        # 화면이 최신이 된다 — 새 엔드포인트도, 추가 요청도 필요 없다.
+        #
+        # 가족 폰은 이 길이 없다(위치를 보내지 않으니까). 그쪽은 푸시가 전부이고,
+        # 대신 상태 전체가 한 봉투에서 와 어긋나지 않는다.
+        #
+        # **응답에 키를 더하는 것은 안전하다.** 이 필드를 모르는 옛 앱은 무시한다.
+        return self.reply(200, {"ok": True, "state": content_state(session)})
 
     def handle_session_end(self, session_id, body, me):
         session = self.owned_session(session_id, me)
