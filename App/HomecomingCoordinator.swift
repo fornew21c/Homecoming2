@@ -601,7 +601,11 @@ final class HomecomingCoordinator {
         // **좌표는 경로 여부와 무관하게 넘긴다.** 위의 nil 들과 다른 값이다 —
         // 남은거리·문구는 서버가 경로를 따라 재므로 앱이 거들면 옛값으로 덮지만,
         // 지금 자리는 이 기기의 GPS 가 원본이다. 서버도 이 값을 받아서 다시 보낸다.
+        //
+        // **잰 시각도 함께 넘긴다.** 좌표만 넘기고 시각을 두고 오면, 화면은 이 기기의
+        // GPS 로 그린 자리를 보여 주면서 나이는 서버 푸시가 닿은 시각으로 말한다.
         let here = tracker.lastLocation?.coordinate
+        let heresTime = tracker.lastLocation?.timestamp
         Task { [activity] in
             await activity.update(
                 remainingMeters: onRoute ? nil : meters,
@@ -611,6 +615,7 @@ final class HomecomingCoordinator {
                 arrivalRadius: Int(home.arrivalRadius),
                 anomaly: anomaly,
                 coordinate: here,
+                measuredAt: heresTime,
                 home: home.coordinate,
                 homeRadius: Int(home.arrivalRadius)
             )

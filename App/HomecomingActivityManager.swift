@@ -179,6 +179,8 @@ final class HomecomingActivityManager {
         arrivalRadius: Int = 60,
         anomaly: HomecomingAttributes.Anomaly? = nil,
         coordinate: CLLocationCoordinate2D? = nil,
+        /// `coordinate` 를 **잰 시각**. 좌표와 짝이다 — 둘 다 이 기기의 GPS 가 원본이다.
+        measuredAt: Date? = nil,
         home: CLLocationCoordinate2D? = nil,
         homeRadius: Int? = nil
     ) async {
@@ -214,7 +216,19 @@ final class HomecomingActivityManager {
             // 사라지고 있었다 — 이상 상황 한 번 올릴 때 지연 표기("10분 지연")가
             // 같이 지워졌다. `previous` 에서 그대로 옮긴다.
             delaySeconds: previous.delaySeconds,
-            measuredAt: previous.measuredAt,
+            // **이건 서버만 아는 값이 아니다.** 좌표와 같은 규칙을 쓴다 — 새 자리를
+            // 아는 호출부는 그 자리를 잰 시각을 함께 넘기고, 모르는 호출부만 옮겨 담는다.
+            //
+            // 옮겨 담기만 하던 동안 귀가자 폰에서 이런 일이 났다(2026-08-21 14:41 실주행):
+            // 화면은 자기 GPS 로 그린 자리를 보여 주면서 "10분 전 위치" 라고 적었다.
+            // 그 10분은 위치의 나이가 아니라 **서버 푸시가 마지막으로 닿은 뒤 흐른
+            // 시간**이었다. 낡음 판정이 `measuredAt` 을 먼저 보기 때문이다
+            // (`HomecomingViewParts.staleNote`). 이 기기는 픽스 시각을 정확히
+            // 아는데도 남이 되돌려 준 값에 매여 있었다.
+            //
+            // **제자리 보고에서는 이 값이 늙는 것이 맞다.** 그때는 새 픽스가 없어
+            // 들고 있던 옛 픽스를 다시 보내므로, 자리도 그 시각 것이다.
+            measuredAt: measuredAt ?? previous.measuredAt,
             // 이것이 지워지면 지도의 이탈 한 줄이 사라져, 점과 색이 어긋난 이유를
             // 화면이 설명하지 못한다. `travelledMeters` 와 같은 이유다.
             estimateSource: previous.estimateSource,

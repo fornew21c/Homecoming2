@@ -18,7 +18,11 @@ struct HomecomingJourneyCard: View {
     let attributes: HomecomingAttributes
     let state: HomecomingAttributes.ContentState
     /// 마지막으로 위치가 확인된 때. 가족 쪽은 갱신 푸시를 받은 시각, 귀가자 쪽은
-    /// 마지막으로 서버에 보고한 시각이다 — 뜻은 같다("내가 아는 자리가 언제 것인가").
+    /// 마지막으로 서버에 보고한 시각이다.
+    ///
+    /// **둘은 뜻이 같지 않다.** 제자리 보고(heartbeat)는 새 픽스가 없을 때 들고 있던
+    /// 옛 픽스를 다시 보내므로, 보고한 시각은 새것인데 자리는 옛것이다. 그래서 이 값은
+    /// `state.measuredAt` 이 없을 때만 쓰는 대체값이다 — 나이의 주인은 픽스 시각이다.
     let lastFixedAt: Date?
 
     var body: some View {
