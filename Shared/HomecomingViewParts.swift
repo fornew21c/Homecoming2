@@ -216,7 +216,11 @@ struct RouteStripView: View {
         let passed = index < position.index
         // `here` 인 이음은 `legLabel` 과 `hereNote` 두 줄이 함께 들어갈 수 있어
         // 30, 아니면 한 줄(`legLabel`)뿐이라 16으로 좁힌다.
-        let height: CGFloat = here ? 30 : 16
+        //
+        // 버스 도착이 붙는 이음은 줄이 하나 더 들어간다. 그 줄은 승차 15분 전부터만
+        // 있으므로 평소 높이는 그대로다.
+        let hasArrival = index == busArrivalIndex && busArrivalNote != nil
+        let height: CGFloat = (here ? 30 : 16) + (hasArrival ? 13 : 0)
 
         HStack(alignment: .center, spacing: 10) {
             ZStack(alignment: .top) {
@@ -247,10 +251,34 @@ struct RouteStripView: View {
                         .foregroundStyle(.white.opacity(0.45))
                         .lineLimit(1)
                 }
+                if hasArrival, let note = busArrivalNote {
+                    Text(note)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
             }
             Spacer(minLength: 0)
         }
     }
+
+    /// 버스 도착을 붙일 이음. 지금 자리에서 앞으로 가장 가까운 버스 구간이다.
+    ///
+    /// **서버가 값을 실을 때만 그린다.** 서울 시내버스는 공공데이터에 도착정보가
+    /// 없어서 영영 안 온다 — 그때 이 값은 nil 이고 줄이 안 붙는다.
+    ///
+    /// 노선번호로 다시 맞추지 않는다. 서버가 **다음** 버스 구간의 값만 싣기 때문이다.
+    private var busArrivalIndex: Int? {
+        guard state.busArrivalAt != nil else { return nil }
+        return shape.stops.indices.first {
+            $0 >= position.index && shape.stops[$0].mode == "bus"
+        }
+    }
+
+    /// 그 이음에 적을 도착 한 줄. **문구는 `ContentState` 가 만든다** —
+    /// 잠금화면이 같은 값을 쓰므로 두 화면이 갈라질 수 없다.
+    private var busArrivalNote: String? { state.busArrivalLine }
 
     /// 그 정류장으로 가는 수단과 시간. "버스 9분"
     ///

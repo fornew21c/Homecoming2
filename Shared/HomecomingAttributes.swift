@@ -171,6 +171,35 @@ struct HomecomingAttributes: ActivityAttributes {
         /// 이상 상황은 그와 무관하게 떴다 사라진다 — 늦어지다 따라잡을 수도 있고,
         /// 도착 직전에 멈출 수도 있다. 한 축에 욱여넣으면 둘 다 망가진다.
         var anomaly: Anomaly?
+
+        /// 다음에 탈 버스의 노선번호. 예: `"999"`.
+        ///
+        /// 셋(`busArrivalNo` · `busArrivalAt` · `busArrivalStops`)은 함께 오거나
+        /// 함께 없다. 서버는 승차 15분 전부터만 싣는다.
+        ///
+        /// **없는 것이 기본이다.** 서울 시내버스는 공공데이터에 도착정보가 없어서
+        /// 163번 구간에는 영영 안 온다(2026-08-26 실측: 국회의사당역 좌표로 정류장을
+        /// 조회하면 빈 결과다). 화면은 그때 줄을 안 그린다 — 틀린 값을 그리는 것보다
+        /// 안 그리는 것이 낫다.
+        ///
+        /// 서버가 조회를 배경으로 돌리므로 **첫 갱신에는 없고 그다음부터 있다.**
+        /// 조회가 실측 9~13초인데 위치 보고 타임아웃이 8초라, 기다리게 두면
+        /// 이 화면을 살려 주는 그 응답 자체가 끊긴다.
+        var busArrivalNo: String?
+
+        /// 그 버스가 정류장에 닿을 **절대시각**.
+        ///
+        /// **`몇 분 뒤` 가 아닌 이유가 이 앱의 갱신 방식이다.** 위치 보고를
+        /// 일으키는 것은 시간이 아니라 150m 이동이고(`distanceFilter`), 정류장에
+        /// 서서 기다리는 동안은 안 움직인다. 그동안 화면을 움직일 길은 푸시뿐인데
+        /// 그게 늦으면 `10분 후` 가 8분 뒤에도 `10분 후` 다.
+        ///
+        /// 절대시각이면 시계가 알아서 흐른다. `expectedArrival` 이 이미 같은
+        /// 이유로 절대시각이다.
+        var busArrivalAt: Date?
+
+        /// 그 버스가 몇 정류장 앞에 있는지. 모르면 nil.
+        var busArrivalStops: Int?
     }
 }
 
@@ -482,6 +511,9 @@ extension HomecomingAttributes.ContentState {
         case checkInDeadline
         case anomaly
         case endReason
+        case busArrivalNo
+        case busArrivalAt
+        case busArrivalStops
     }
 
     init(from decoder: Decoder) throws {
@@ -504,6 +536,9 @@ extension HomecomingAttributes.ContentState {
         checkInDeadline = try container.decodeWireDateIfPresent(forKey: .checkInDeadline)
         anomaly = try container.decodeIfPresent(HomecomingAttributes.Anomaly.self, forKey: .anomaly)
         endReason = try container.decodeIfPresent(HomecomingAttributes.EndReason.self, forKey: .endReason)
+        busArrivalNo = try container.decodeIfPresent(String.self, forKey: .busArrivalNo)
+        busArrivalAt = try container.decodeWireDateIfPresent(forKey: .busArrivalAt)
+        busArrivalStops = try container.decodeIfPresent(Int.self, forKey: .busArrivalStops)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -526,6 +561,9 @@ extension HomecomingAttributes.ContentState {
         try container.encodeWireIfPresent(checkInDeadline, forKey: .checkInDeadline)
         try container.encodeIfPresent(anomaly, forKey: .anomaly)
         try container.encodeIfPresent(endReason, forKey: .endReason)
+        try container.encodeIfPresent(busArrivalNo, forKey: .busArrivalNo)
+        try container.encodeWireIfPresent(busArrivalAt, forKey: .busArrivalAt)
+        try container.encodeIfPresent(busArrivalStops, forKey: .busArrivalStops)
     }
 }
 
@@ -601,6 +639,26 @@ extension HomecomingAttributes.ContentState {
     /// 적으면 "가족에게 이렇게 보인다" 는 확인이 거짓말이 된다.
     var arrivalClockLine: String {
         "\(arrivalClockText) \(stage.isFinished ? "도착" : "도착 예정")"
+    }
+
+    /// 다음에 탈 버스의 도착 한 줄. "999번 18:42 도착 · 6정류장 전"
+    ///
+    /// **노선도와 잠금화면이 이 하나를 같이 쓴다.** 두 화면이 같은 값을 다르게
+    /// 적으면 어느 쪽이 참인지 알 수 없다 — `arrivalClockLine` 이 같은 이유로
+    /// 여기 있다.
+    ///
+    /// **시각으로 적는다.** 남은 분으로 적으면 갱신이 끊긴 동안 그 글자가 멈춘다.
+    /// 정류장에서 기다리는 동안이 정확히 그 상황이고, 하필 그때 이 값이 가장
+    /// 필요하다. 근거는 `busArrivalAt` 주석에 있다.
+    ///
+    /// 값이 없으면 nil 이고 두 화면 다 줄을 안 그린다.
+    var busArrivalLine: String? {
+        guard let at = busArrivalAt, let no = busArrivalNo else { return nil }
+        var line = "\(no)번 \(Self.clockFormatter.string(from: at)) 도착"
+        if let stops = busArrivalStops, stops > 0 {
+            line += " · \(stops)정류장 전"
+        }
+        return line
     }
 
     /// 도착예정이 이미 지났다. **그리는 그 순간의 판정이다.**

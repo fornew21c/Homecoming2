@@ -98,6 +98,23 @@ struct HomecomingLockScreenView: View {
 
             HomecomingProgressBar(state: state)
 
+            // **다음에 탈 버스.** 서버가 승차 15분 전부터만 싣고, 서울 시내버스는
+            // 자료가 없어 영영 안 온다 — 그래서 평소에는 이 줄이 없다.
+            //
+            // 문구는 `ContentState.busArrivalLine` 이 만든다. 노선도가 같은 것을
+            // 쓰므로 두 화면이 갈라질 수 없다.
+            if let line = state.busArrivalLine {
+                HStack(spacing: 4) {
+                    Image(systemName: "bus.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(line)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .foregroundStyle(.white.opacity(0.75))
+            }
+
             HStack(spacing: 8) {
                 Label(attributes.destinationName, systemImage: "house.fill")
                     .font(.system(size: 11, weight: .medium))

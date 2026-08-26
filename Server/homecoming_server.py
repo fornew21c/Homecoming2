@@ -980,8 +980,12 @@ ARRIVAL_CACHE_SECONDS = 30
 # 시내버스가 이 자료에 없기 때문이고, 그건 10분 뒤에도 그대로다.
 #
 # 그래도 영원히 포기하지는 않는다. 일시적 장애와 구분이 안 되기 때문이다.
-# 10분이면 귀가 한 번(72분)에 최대 7회로 묶인다 — 캐시가 없던 동안은 위치
-# 보고마다였고, 한 번에 4.4초였다(2026-08-26 실측).
+#
+# **실제로는 귀가 한 번에 2회다**(2026-08-26, 실제 경로를 5초마다 물어 셌다).
+# 창이 이 간격보다 먼저 닫히기 때문이다 —
+#   163(서울, 늘 실패): 창이 승차 540초까지라 9분인데 재시도가 10분이다 → 1회
+#   999(고양, 성공)   : 첫 조회에 찾고 성공은 영구 캐시다              → 1회
+# 캐시가 없던 동안은 위치 보고마다였고 한 번에 4.4초였다.
 ARRIVAL_STOP_RETRY_SECONDS = 10 * 60
 
 
@@ -2075,20 +2079,6 @@ def next_bus_leg(legs, progress):
     return None
 
 
-def bus_arrival_for(legs, progress, now=None):
-    """다음 버스 구간의 실시간 도착. 창 밖이거나 모르면 None."""
-    leg = next_bus_leg(legs, progress)
-    if not leg:
-        return None
-    left = leg["startsAt"] - progress
-    if left > ARRIVAL_LEAD_SECONDS:
-        return None
-    points = leg.get("points") or []
-    if not points:
-        return None
-    return bus_arrival(points[0][0], points[0][1], leg["busNo"], now=now)
-
-
 # 배경으로 채워 둔 도착값. (노선번호, 승차위도, 승차경도) → (잰 시각, 값 또는 None)
 _arrival_ready = {}
 
@@ -2143,10 +2133,27 @@ def arrival_ready(legs, progress, now=None):
     lat, lon = points[0][0], points[0][1]
     key = (str(leg["busNo"]), lat, lon)
     cached = _arrival_ready.get(key)
-    if cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
-        return cached[1]
+    value = cached[1] if cached else None
+
+    # **이미 지나간 시각은 주지 않는다.** 배경 갱신이 계속 실패하면 마지막으로
+    # 성공한 값이 그대로 남는데, 절대시각이라 시계가 흐르면 언젠가 과거가 된다.
+    # 그때 화면은 **이미 떠난 버스**를 `18:42 도착` 이라고 말한다.
+    #
+    # 창이 15분이라 최대 15분까지 그럴 수 있었다. 하필 정류장에서 기다리는
+    # 그 15분이다. 틀린 값을 그리는 것을 아무것도 안 그리는 것보다 나쁘게 본다.
+    #
+    # 지나갔으면 캐시가 신선하든 아니든 새로 묻는다 — 그다음 차가 알고 싶은 것이다.
+    #
+    # **엄격한 과거만 지난 것으로 본다.** 도착 시각이 정확히 지금이면 "지금 도착"
+    # 이고 그건 참이다. 거짓말이 되는 것은 이미 지나간 뒤부터다.
+    gone = value is not None and value["at"] < at
+    if gone:
+        value = None
+    elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+        return value
+
     start_arrival_refresh(leg["busNo"], lat, lon)
-    return cached[1] if cached else None
+    return value
 
 
 def where_on_route(legs, lat, lon, progress):

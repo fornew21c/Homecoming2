@@ -12,6 +12,7 @@
 import datetime
 import pathlib
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -256,27 +257,37 @@ class NextBusLegTests(unittest.TestCase):
 
 
 class ArrivalWindowTests(unittest.TestCase):
+    """승차 15분 전부터만 묻는다.
+
+    **살아 있는 길(`arrival_ready`)로 잰다.** 예전에는 `bus_arrival_for` 로 쟀는데
+    그 함수는 `content_state` 가 안 쓰게 되면서 죽었다 — 죽은 코드를 재는 시험은
+    지나가도 아무것도 지켜 주지 않는다.
+    """
 
     def setUp(self):
-        hs._arrival_stops.clear()
-        hs._arrival_rows.clear()
+        hs._arrival_ready.clear()
+        hs._arrival_refreshing.clear()
+
+    def asked(self, progress):
+        """그 자리에서 배경 갱신을 시켰는가."""
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            hs.arrival_ready(LEGS, progress, now=NOW)
+        return len(started)
 
     def test_승차까지_15분_넘게_남으면_안_묻는다(self):
-        asked = []
-        with mock.patch.object(hs, "bus_arrival",
-                               lambda *a, **k: asked.append(1)):
-            # 999번 승차가 4140초인데 지금 2000초다 — 2140초(35분) 남았다.
-            got = hs.bus_arrival_for(LEGS, 2000, now=NOW)
-        self.assertEqual(asked, [])
-        self.assertIsNone(got)
+        # 999번 승차가 4140초인데 지금 2000초다 — 2140초(35분) 남았다.
+        self.assertEqual(self.asked(2000), 0)
 
     def test_15분_안으로_들어오면_묻는다(self):
-        with mock.patch.object(
-                hs, "bus_arrival",
-                lambda lat, lon, no, now=None: {"no": no, "at": NOW, "stops": 3}):
-            # 3300초면 승차까지 840초(14분) 남았다.
-            got = hs.bus_arrival_for(LEGS, 3300, now=NOW)
-        self.assertEqual(got["no"], "999")
+        # 3300초면 승차까지 840초(14분) 남았다.
+        self.assertEqual(self.asked(3300), 1)
+
+    def test_경계는_정확히_15분이다(self):
+        """`>` 로 자른다 — 딱 900초 남은 자리는 창 **안**이다."""
+        self.assertEqual(self.asked(4140 - 900), 1)      # 900초 남음 → 묻는다
+        self.assertEqual(self.asked(4140 - 901), 0)      # 901초 남음 → 안 묻는다
 
 
 class NonBlockingTests(unittest.TestCase):
@@ -303,7 +314,9 @@ class NonBlockingTests(unittest.TestCase):
         self.assertEqual(len(started), 1)
 
     def test_캐시에_있으면_그걸_준다(self):
-        value = {"no": "999", "at": NOW, "stops": 3}
+        # 도착이 3분 뒤다. `NOW` 를 그대로 쓰면 "지금 도착" 경계에 걸쳐,
+        # 이 시험이 재려는 것(캐시 적중)과 다른 것을 재게 된다.
+        value = {"no": "999", "at": NOW + datetime.timedelta(minutes=3), "stops": 3}
         hs._arrival_ready[("999", 37.673130, 126.787047)] = (NOW, value)
         started = []
         with mock.patch.object(hs, "start_arrival_refresh",
@@ -353,6 +366,91 @@ class NegativeStopCacheTests(unittest.TestCase):
             hs.arrival_stop(37.528330, 126.917660,
                             now=NOW + datetime.timedelta(minutes=10))
         self.assertEqual(len(calls), 2)
+
+
+class StaleArrivalTests(unittest.TestCase):
+    """이미 지나간 도착은 값이 아니다.
+
+    배경 갱신이 계속 실패하면 마지막으로 성공한 값이 그대로 남는다. 절대시각이라
+    시계가 흐르면 언젠가 과거가 되고, 그때 화면은 이미 떠난 버스를 가리킨다.
+    """
+
+    def setUp(self):
+        hs._arrival_ready.clear()
+        hs._arrival_refreshing.clear()
+
+    def test_지나간_값은_안_준다(self):
+        key = ("999", 37.673130, 126.787047)
+        # 1분 전에 도착했어야 할 버스. 방금 잰 값이라 캐시는 신선하다.
+        hs._arrival_ready[key] = (NOW, {"no": "999", "stops": 0,
+                                        "at": NOW - datetime.timedelta(minutes=1)})
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertIsNone(got)
+        # 신선해도 다시 묻는다 — 알고 싶은 것은 그다음 차다.
+        self.assertEqual(len(started), 1)
+
+    def test_낡았어도_아직_안_지났으면_준다(self):
+        key = ("999", 37.673130, 126.787047)
+        # 2분 전에 잰 값(캐시 30초를 넘겼다)이지만 도착은 3분 뒤다.
+        hs._arrival_ready[key] = (NOW - datetime.timedelta(minutes=2),
+                                  {"no": "999", "stops": 2,
+                                   "at": NOW + datetime.timedelta(minutes=3)})
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        # 절대시각이라 낡아도 참이다. 새 값은 배경이 가져온다.
+        self.assertEqual(got["no"], "999")
+        self.assertEqual(len(started), 1)
+
+
+class RefreshThreadTests(unittest.TestCase):
+    """배경 갱신이 **실제로** 스레드로 돌고 캐시를 채운다.
+
+    다른 시험들은 `start_arrival_refresh` 를 통째로 가짜로 바꿔서 이 기능의
+    본체 — 스레드를 띄우고, 중복을 막고, 결과를 써 넣는 것 — 이 한 번도 안 돈다.
+    """
+
+    def setUp(self):
+        hs._arrival_ready.clear()
+        hs._arrival_refreshing.clear()
+
+    def _wait(self, key, timeout=2.0):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if key in hs._arrival_ready:
+                return True
+            time.sleep(0.01)
+        return False
+
+    def test_배경이_캐시를_채운다(self):
+        value = {"no": "999", "at": NOW, "stops": 4}
+        key = ("999", 37.673130, 126.787047)
+        with mock.patch.object(hs, "bus_arrival", lambda *a, **k: value):
+            hs.start_arrival_refresh("999", 37.673130, 126.787047)
+            self.assertTrue(self._wait(key), "배경 갱신이 캐시를 안 채웠다")
+        self.assertEqual(hs._arrival_ready[key][1], value)
+        # 다 끝났으면 진행 중 표시를 지운다.
+        self.assertNotIn(key, hs._arrival_refreshing)
+
+    def test_터져도_진행중_표시를_지운다(self):
+        """안 지우면 그 노선은 이 프로세스가 사는 동안 영영 갱신이 막힌다."""
+        key = ("999", 37.673130, 126.787047)
+
+        def boom(*a, **k):
+            raise ValueError("망가진 응답")
+
+        with mock.patch.object(hs, "bus_arrival", boom):
+            hs.start_arrival_refresh("999", 37.673130, 126.787047)
+            end = time.monotonic() + 2.0
+            while key in hs._arrival_refreshing and time.monotonic() < end:
+                time.sleep(0.01)
+        self.assertNotIn(key, hs._arrival_refreshing)
+        # 터졌으니 값은 안 써진다 — 낡은 값이 있었다면 그대로 남는다.
+        self.assertNotIn(key, hs._arrival_ready)
 
 
 if __name__ == "__main__":
