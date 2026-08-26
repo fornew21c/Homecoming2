@@ -8,7 +8,7 @@ import Foundation
 /// `RouteStore.save`)를 인자로도 부를 수 있게 둔다.
 ///
 /// 좌표는 실제 귀가 경로이고, 앱의 장소 검색이 준 값이다. 예전에는 지오코딩이
-/// 실패해서 손으로 짐작한 값을 썼는데 **풍산역이 2km 어긋나 있었다.**
+/// 실패해서 손으로 짐작한 값을 썼는데 **도착역이 2km 어긋나 있었다.**
 /// `Tools/routes/commute-sample.json` 도 그 값으로 만들어져 있었다.
 @MainActor
 enum RouteSample {
@@ -16,26 +16,26 @@ enum RouteSample {
     /// 회사(회사) → 집. 구간 시간은 대중교통 앱이 알려 준 실측이다.
     ///
     /// **좌표는 공공데이터의 진짜 정류장 자리다.** 예전에는 손으로 짐작한 값을
-    /// 썼는데 풍산역이 2km 어긋나 있었다.
+    /// 썼는데 도착역이 2km 어긋나 있었다.
     ///
     /// 집은 이 기기에 등록된 집을 쓴다. 하드코딩하면 남의 집으로 가는 경로가 된다.
     static func make(environment: HomecomingEnvironment, coordinator: HomecomingCoordinator) async {
-        let origin = CLLocationCoordinate2D(latitude: 37.528676, longitude: 126.918861)
+        let origin = CLLocationCoordinate2D(latitude: 37.528676, longitude: 127.918861)
         guard let home = coordinator.home else {
             print("[귀가마중] 집이 등록되어 있지 않다. 먼저 집을 등록해라.")
             return
         }
 
         let steps: [RouteTracer.Step] = [
-            step(.walk, "출발역.은행앞", 37.528479, 126.918068, 6),
+            step(.walk, "출발역.은행앞", 37.528479, 127.918068, 6),
             step(.wait, "163번 대기", nil, nil, 3),
-            step(.bus, "환승로터리", 37.553809, 126.936883, 9, busNo: "163"),
-            step(.walk, "서강대학교", 37.551100, 126.937970, 7),
+            step(.bus, "환승로터리", 37.553809, 127.936883, 9, busNo: "163"),
+            step(.walk, "서강대학교", 37.551100, 127.93797, 7),
             step(.wait, "경의중앙선 대기", nil, nil, 4),
-            step(.subway, "풍산역", 37.674083, 126.786117, 31),
-            step(.walk, "풍산역 정류장", 37.673850, 126.786033, 6),
+            step(.subway, "도착역", 37.674083, 127.786117, 31),
+            step(.walk, "도착역 정류장", 37.673850, 127.786033, 6),
             step(.wait, "999번 대기", nil, nil, 2),
-            step(.bus, "아파트단지", 37.682450, 126.810783, 10, busNo: "999"),
+            step(.bus, "아파트단지", 37.682450, 127.810783, 10, busNo: "999"),
             step(.walk, home.name, home.latitude, home.longitude, 3),
         ]
 
@@ -77,14 +77,14 @@ enum RouteSample {
 
     /// 실제 귀가 경로에 나오는 이름들로 장소 검색을 시험한다.
     ///
-    /// 고르는 이름에 뜻이 있다. 지하철역(서강대역)·버스정류장(환승로터리)·
+    /// 고르는 이름에 뜻이 있다. 지하철역(환승역)·버스정류장(환승로터리)·
     /// 아파트 단지(아파트단지)는 각각 다른 종류의 장소이고, 정류장 이름이 제일
     /// 어렵다 — 지도 데이터에 시설로 등록되어 있지 않을 수 있다.
     static func probeSearch() async {
-        let near = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
+        let near = CLLocationCoordinate2D(latitude: 37.5665, longitude: 127.978)
         let names = [
-            "국회의사당역", "환승로터리", "서강대역",
-            "풍산역", "아파트단지", "회사",
+            "국회의사당역", "환승로터리", "환승역",
+            "도착역", "아파트단지", "회사",
         ]
 
         let search = PlaceSearch()

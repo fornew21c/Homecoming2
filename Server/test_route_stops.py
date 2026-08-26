@@ -39,9 +39,9 @@ class RouteStopsTests(unittest.TestCase):
         self.assertEqual(names, [
             "출발역.은행앞",
             "환승로터리",
-            "서강대역",
-            "풍산역",
-            "풍산역 정류장",
+            "환승역",
+            "도착역",
+            "도착역 정류장",
             "아파트단지",
             "집",
         ])
@@ -50,8 +50,8 @@ class RouteStopsTests(unittest.TestCase):
         stops = route_stops(legs())
         waits = {s["name"]: s["waitSeconds"] for s in stops}
         self.assertEqual(waits["출발역.은행앞"], 180)
-        self.assertEqual(waits["서강대역"], 240)
-        self.assertEqual(waits["풍산역 정류장"], 120)
+        self.assertEqual(waits["환승역"], 240)
+        self.assertEqual(waits["도착역 정류장"], 120)
         self.assertEqual(waits["환승로터리"], 0)
 
     def test_거리의_합이_경로_길이와_같다(self):

@@ -255,7 +255,7 @@ POST /route
   "legs": [
     { "mode": "walk", "startsAt": 0, "seconds": 300,
       "toName": "출발역.은행앞",
-      "points": [[37.528676, 126.918861], ...] },
+      "points": [[37.528676, 127.918861], ...] },
     { "mode": "wait", "startsAt": 300, "seconds": 180, "toName": "163번 대기",
       "points": [[37.529, 126.917]] },
     ...
