@@ -279,5 +279,81 @@ class ArrivalWindowTests(unittest.TestCase):
         self.assertEqual(got["no"], "999")
 
 
+class NonBlockingTests(unittest.TestCase):
+    """`content_state()` 는 네트워크를 기다리지 않는다.
+
+    앱의 위치 보고 타임아웃이 8초인데 도착 조회가 실측 9~13초다. 기다리면
+    귀가자 화면이 응답으로 상태를 받는 길이 끊긴다.
+    """
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+        hs._arrival_rows.clear()
+        hs._arrival_ready.clear()
+        hs._arrival_refreshing.clear()
+
+    def test_캐시가_비면_안_싣고_넘어간다(self):
+        """느린 조회를 배경으로 미룬다 — 그 자리에서 기다리지 않는다."""
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertIsNone(got)
+        # 다음 번을 위해 배경 갱신을 시켰다.
+        self.assertEqual(len(started), 1)
+
+    def test_캐시에_있으면_그걸_준다(self):
+        value = {"no": "999", "at": NOW, "stops": 3}
+        hs._arrival_ready[("999", 37.673130, 126.787047)] = (NOW, value)
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertEqual(got["no"], "999")
+        # 아직 신선하니 갱신도 안 시킨다.
+        self.assertEqual(started, [])
+
+    def test_창_밖이면_배경_갱신도_안_시킨다(self):
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 2000, now=NOW)
+        self.assertIsNone(got)
+        self.assertEqual(started, [])
+
+
+class NegativeStopCacheTests(unittest.TestCase):
+    """정류장을 못 찾은 것도 캐시한다 — 서울이 매번 4.4초를 태웠다."""
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+
+    def test_못_찾은_것도_기억한다(self):
+        calls = []
+
+        def none(lat, lon, limit=8):
+            calls.append(1)
+            return []
+
+        with mock.patch.object(hs, "nearby_stops", none):
+            hs.arrival_stop(37.528330, 126.917660, now=NOW)
+            hs.arrival_stop(37.528330, 126.917660, now=NOW)
+        self.assertEqual(len(calls), 1)
+
+    def test_10분_뒤에는_다시_본다(self):
+        """일시적 장애일 수도 있다. 영원히 포기하지는 않는다."""
+        calls = []
+
+        def none(lat, lon, limit=8):
+            calls.append(1)
+            return []
+
+        with mock.patch.object(hs, "nearby_stops", none):
+            hs.arrival_stop(37.528330, 126.917660, now=NOW)
+            hs.arrival_stop(37.528330, 126.917660,
+                            now=NOW + datetime.timedelta(minutes=10))
+        self.assertEqual(len(calls), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

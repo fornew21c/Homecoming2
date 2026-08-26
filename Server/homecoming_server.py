@@ -964,7 +964,9 @@ def bus_leg_waypoints(route_no, from_lat, from_lon, to_name, from_name=None):
 BUS_ARRIVAL = ("https://apis.data.go.kr/1613000/ArvlInfoInqireService"
                "/getSttnAcctoArvlPrearngeInfoList")
 
-# 승차 좌표 → (도시코드, 정류장 id). 정류장은 세션 중에 바뀌지 않으니 영구 캐시다.
+# 승차 좌표 → (잰 시각, (도시코드, 정류장 id) 또는 None). 정류장은 세션 중에
+# 바뀌지 않으니 찾은 값은 영구 캐시다. 못 찾은 값(None)은
+# `ARRIVAL_STOP_RETRY_SECONDS` 동안만이다 — 아래 `arrival_stop` 참고.
 _arrival_stops = {}
 
 # (도시코드, 정류장 id) → (잰 시각, 응답 줄들). 30초.
@@ -973,6 +975,14 @@ _arrival_rows = {}
 # 도착정보를 얼마나 오래 재사용하는가. 짧을수록 정확하지만 호출이 는다.
 # 30초면 승차 15분 전부터 한 구간에 최대 30회다(아래 `ARRIVAL_LEAD_SECONDS` 참고).
 ARRIVAL_CACHE_SECONDS = 30
+
+# 정류장을 못 찾았을 때 다시 묻기까지. 못 찾은 것은 대개 영구적이다 — 서울
+# 시내버스가 이 자료에 없기 때문이고, 그건 10분 뒤에도 그대로다.
+#
+# 그래도 영원히 포기하지는 않는다. 일시적 장애와 구분이 안 되기 때문이다.
+# 10분이면 귀가 한 번(72분)에 최대 7회로 묶인다 — 캐시가 없던 동안은 위치
+# 보고마다였고, 한 번에 4.4초였다(2026-08-26 실측).
+ARRIVAL_STOP_RETRY_SECONDS = 10 * 60
 
 
 def tago_arrival_body(city_code, node_id):
@@ -1024,7 +1034,7 @@ def arrival_rows_cached(city_code, node_id, at):
     return rows
 
 
-def arrival_stop(lat, lon):
+def arrival_stop(lat, lon, now=None):
     """승차 좌표에 가장 가까운 정류장 → (도시코드, id). 못 찾으면 None.
 
     **같은 이름이 여럿이다.** 풍산역이라는 이름의 정류장이 다섯 곳이고 방향별로
@@ -1049,9 +1059,18 @@ def arrival_stop(lat, lon):
     노선이 안 서는 정류장을 골랐을 때는 `bus_arrival` 이 그 노선을 못 찾아
     None 이 된다. 틀린 값을 그리는 것보다 안 그리는 쪽이다.
     """
+    at = now or datetime.now(timezone.utc)
     key = (round(lat, 5), round(lon, 5))
-    if key in _arrival_stops:
-        return _arrival_stops[key]
+    cached = _arrival_stops.get(key)
+    if cached:
+        measured_at, value = cached
+        # 값이 있으면 시각과 무관하게 그대로 쓴다 — 정류장 자리는 안 바뀐다.
+        if value is not None:
+            return value
+        # 못 찾은 것은 `ARRIVAL_STOP_RETRY_SECONDS` 가 지나기 전까지는 다시
+        # 묻지 않는다.
+        if (at - measured_at).total_seconds() < ARRIVAL_STOP_RETRY_SECONDS:
+            return None
     best = None
     for stop in nearby_stops(lat, lon, 20):
         if not stop.get("id") or stop.get("city") is None:
@@ -1060,8 +1079,7 @@ def arrival_stop(lat, lon):
         if best is None or gap < best[0]:
             best = (gap, (stop["city"], stop["id"]))
     found = best[1] if best else None
-    if found:
-        _arrival_stops[key] = found
+    _arrival_stops[key] = (at, found)
     return found
 
 
@@ -1079,7 +1097,7 @@ def bus_arrival(lat, lon, route_no, now=None):
     # 인자 이름이 모듈의 `now()` 를 가린다. 인자 이름을 바꾸면 부르는 쪽이
     # 헷갈리므로 여기서 `datetime` 을 직접 쓴다.
     at = now or datetime.now(timezone.utc)
-    stop = arrival_stop(lat, lon)
+    stop = arrival_stop(lat, lon, now=at)
     if not stop:
         return None
     city_code, node_id = stop
@@ -1504,9 +1522,12 @@ def content_state(session):
     # 그 푸시가 늦는 것이 2026-08-25 에 겪은 일이다. 절대시각이면 시계가 흐른다.
     #
     # 셋 다 없을 수 있다. 서울 시내버스는 자료가 없어서 늘 없다(2026-08-26 실측).
+    #
+    # **여기서 기다리지 않는다.** 캐시에 있는 것만 싣고 없으면 배경에서 채운다 —
+    # 조회가 실측 9~13초인데 앱의 위치 보고 타임아웃이 8초다(2026-08-26).
     route = route_of(session)
     if route:
-        arrival = bus_arrival_for(route["legs"], session["route_progress"] or 0)
+        arrival = arrival_ready(route["legs"], session["route_progress"] or 0)
         if arrival:
             state["busArrivalNo"] = arrival["no"]
             state["busArrivalAt"] = iso(arrival["at"])
@@ -1612,9 +1633,13 @@ def start_activities(session):
         start_activity_for(session, link, state, route_shape)
 
 
-def update_activities(session, alert=None):
-    """이미 뜬 액티비티들에 새 상태를 밀어 넣는다."""
-    state = content_state(session)
+def update_activities(session, alert=None, state=None):
+    """이미 뜬 액티비티들에 새 상태를 밀어 넣는다.
+
+    `state` 를 부르는 쪽이 미리 구해 넘길 수 있다. `handle_location` 이 응답에도
+    같은 값을 실어야 해서 — 안 넘기면 `content_state` 를 두 번 부르게 된다.
+    """
+    state = state if state is not None else content_state(session)
     rows = db().execute(
         "SELECT * FROM activities WHERE session_id = ?", (session["id"],)
     ).fetchall()
@@ -2062,6 +2087,66 @@ def bus_arrival_for(legs, progress, now=None):
     if not points:
         return None
     return bus_arrival(points[0][0], points[0][1], leg["busNo"], now=now)
+
+
+# 배경으로 채워 둔 도착값. (노선번호, 승차위도, 승차경도) → (잰 시각, 값 또는 None)
+_arrival_ready = {}
+
+# 지금 배경에서 채우는 중인 키. 같은 것을 여러 번 띄우지 않는다.
+_arrival_refreshing = set()
+_arrival_lock = threading.Lock()
+
+
+def start_arrival_refresh(route_no, lat, lon):
+    """도착값을 배경에서 채운다. **기다리지 않는다.**
+
+    이 파일이 이미 `threading.Thread(daemon=True)` 를 이렇게 쓴다 — 세션 시작의
+    액티비티 생성, 종료 처리, 노선표 예열이 전부 같은 모양이다.
+    """
+    key = (str(route_no), lat, lon)
+    with _arrival_lock:
+        if key in _arrival_refreshing:
+            return
+        _arrival_refreshing.add(key)
+
+    def fill():
+        try:
+            value = bus_arrival(lat, lon, route_no)
+            _arrival_ready[key] = (datetime.now(timezone.utc), value)
+        except Exception as error:                          # noqa: BLE001
+            log(f"  버스 도착 배경 갱신 실패: {error!r}")
+        finally:
+            with _arrival_lock:
+                _arrival_refreshing.discard(key)
+
+    threading.Thread(target=fill, daemon=True).start()
+
+
+def arrival_ready(legs, progress, now=None):
+    """다음 버스의 도착값 — **캐시에 있는 것만.** 없으면 None 이고 배경에서 채운다.
+
+    **여기서 기다리면 안 된다.** 앱의 위치 보고 타임아웃이 8초인데 도착 조회가
+    실측 9~13초다(2026-08-26). 기다리면 귀가자 화면이 위치 보고 응답으로 상태를
+    받는 길이 끊기고, 그 길은 푸시 지연을 우회하려고 만든 것이다.
+
+    첫 보고에는 값이 없고 그다음부터 있다. 모르는 것을 기다리게 하느니 안 그린다.
+    """
+    at = now or datetime.now(timezone.utc)
+    leg = next_bus_leg(legs, progress)
+    if not leg:
+        return None
+    if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
+        return None
+    points = leg.get("points") or []
+    if not points:
+        return None
+    lat, lon = points[0][0], points[0][1]
+    key = (str(leg["busNo"]), lat, lon)
+    cached = _arrival_ready.get(key)
+    if cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+        return cached[1]
+    start_arrival_refresh(leg["busNo"], lat, lon)
+    return cached[1] if cached else None
 
 
 def where_on_route(legs, lat, lon, progress):
@@ -3114,7 +3199,12 @@ class Handler(BaseHTTPRequestHandler):
                 "title": "곧 도착",
                 "body": f"{은는이가(session['traveler_name'])} {int(session['remaining_meters'])}m 앞이에요",
             }
-        update_activities(session, alert)
+        # **한 번만 구해 나눠 쓴다.** `update_activities` 안에서, 그리고 이 응답에
+        # 각각 `content_state(session)` 를 부르면 도착 조회(9~13초, 2026-08-26
+        # 실측)가 이 요청에서 두 번 걸린다 — `start_activities` 가 이미 같은
+        # 이유로 루프 밖에서 한 번만 구해 나눠 쓴다.
+        state = content_state(session)
+        update_activities(session, alert, state=state)
         # **보고한 폰에게 지금 상태를 되돌려 준다.**
         #
         # 귀가자 폰은 남은거리·진행도를 오직 APNs 푸시로만 받는다. 좌표는 자기
@@ -3129,7 +3219,7 @@ class Handler(BaseHTTPRequestHandler):
         # 대신 상태 전체가 한 봉투에서 와 어긋나지 않는다.
         #
         # **응답에 키를 더하는 것은 안전하다.** 이 필드를 모르는 옛 앱은 무시한다.
-        return self.reply(200, {"ok": True, "state": content_state(session)})
+        return self.reply(200, {"ok": True, "state": state})
 
     def handle_session_end(self, session_id, body, me):
         session = self.owned_session(session_id, me)
