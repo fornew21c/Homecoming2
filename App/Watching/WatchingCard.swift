@@ -154,9 +154,17 @@ struct HomecomingJourneySection: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HomecomingJourneyCard(
-                attributes: attributes, state: state, lastFixedAt: lastFixedAt)
-
+            // **지도가 위다.** 예전에는 카드가 위였는데, 카드가 정류장 10개짜리
+            // 노선도 때문에 450pt 를 먹어서 지도가 화면 606pt 에서 시작했다.
+            // 화면이 874pt 니 스크롤하지 않으면 지도의 268pt 만 보였고, 하필
+            // 귀가자 마커는 영역의 가장자리라(`region()` 이 bbox × 1.25 다) 그
+            // 잘린 띠에 들어갔다 — 지도를 열었는데 사람이 안 보였다(2026-08-25).
+            //
+            // 카드를 줄이는 길도 있었지만 노선도는 다 보여야 한다. 그래서 순서를
+            // 바꿨다. 지도는 제목 바로 아래에서 시작해 통째로 들어오고, 카드는
+            // 스크롤해서 본다 — 카드가 답하는 "얼마나 남았나" 는 잠금화면과
+            // 아일랜드에도 있지만, "어디쯤인가" 는 이 지도에만 있다.
+            //
             // 좌표가 없으면 이 뷰가 스스로 아무것도 그리지 않는다.
             HomecomingJourneyMap(
                 travelerName: attributes.travelerName,
@@ -165,6 +173,9 @@ struct HomecomingJourneySection: View {
                 lastFixedAt: lastFixedAt,
                 sessionID: sessionID,
                 routes: routes)
+
+            HomecomingJourneyCard(
+                attributes: attributes, state: state, lastFixedAt: lastFixedAt)
         }
     }
 }
