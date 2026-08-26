@@ -23,6 +23,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import ssl
 import sqlite3
 import shutil
@@ -1088,6 +1089,144 @@ def arrival_stop(lat, lon, now=None):
     return found
 
 
+# --- 서울 버스 실시간 도착 --------------------------------------------------
+#
+# **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을
+# 물어도 빈 결과다(2026-08-26 실측). 서울은 서울시 TOPIS 가 따로 준다.
+#
+# **세 조각이 필요한데 하나가 막혀 있었다.**
+#   정류장 arsId      — `seoul-stops.json` 에 이미 있다
+#   도착정보 호출      — TOPIS `arrive/*` 는 지금 키로 열려 있다
+#   노선번호 → 노선id — `busRouteInfo/*` 가 401 이다
+#
+# 마지막 것을 **표로 받아 풀었다**(`Tools/seoul-routes.py`). 열린데이터광장에
+# 노선번호와 id 가 짝지어진 파일이 있고 신청도 키도 필요 없다. 정류장 표를 같은
+# 이유로 같은 곳에서 받고 있다.
+#
+# **문자열을 파싱하지 않는다.** 응답의 `arrmsg1` 은 `6분17초후[1번째 전]` 같은
+# 글자인데, 같은 항목에 `traTime1`(초)과 `sectOrd1`(지금 지난 정류장 순번)이
+# 숫자로 온다. `곧 도착` 이라고 적혀 있어도 `traTime1` 은 85 다 — 글자를 뜯으면
+# 그런 경우마다 규칙이 늘어난다.
+SEOUL_ARRIVAL = "http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRouteAll"
+SEOUL_ROUTES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "seoul-routes.json"
+_seoul_routes = None
+
+# 노선 하나의 도착정보. 노선 전체 정류장이 한 번에 오므로 정류장별로 나누지 않는다.
+_seoul_rows = {}
+
+
+def seoul_routes():
+    """구워 둔 노선번호 → 노선id 표. 한 번 읽고 들고 있는다."""
+    global _seoul_routes
+    if _seoul_routes is None:
+        try:
+            _seoul_routes = json.loads(SEOUL_ROUTES_PATH.read_text(encoding="utf-8"))
+        except OSError:
+            log("  서울 노선 id 표가 없다 — 서울 버스 도착은 안 뜬다")
+            _seoul_routes = {}
+    return _seoul_routes
+
+
+def seoul_arrival_items(route_id):
+    """그 노선의 전 정류장 도착정보. 실패하면 빈 목록.
+
+    XML 로 온다. 이 파일의 다른 공공데이터가 JSON 인 것과 다르다 — TOPIS 는
+    `_type=json` 을 안 받는다.
+    """
+    if not TAGO_KEY:
+        return []
+    query = urllib.parse.urlencode({"serviceKey": TAGO_KEY, "busRouteId": route_id})
+    try:
+        request = urllib.request.Request(f"{SEOUL_ARRIVAL}?{query}",
+                                         headers={"User-Agent": "homecoming2"})
+        with urllib.request.urlopen(request, timeout=8,
+                                    context=outbound_tls()) as response:
+            body = response.read().decode("utf-8", "replace")
+    except Exception as error:                              # noqa: BLE001
+        log(f"  서울 버스 도착정보 조회 실패: {error!r}")
+        return []
+    return re.findall(r"<itemList>(.*?)</itemList>", body, re.S)
+
+
+def _tag(item, name):
+    found = re.search(rf"<{name}>(.*?)</{name}>", item)
+    return found.group(1) if found else ""
+
+
+def seoul_arrival_items_cached(route_id, at):
+    """`seoul_arrival_items` 를 `ARRIVAL_CACHE_SECONDS` 동안 재사용한다."""
+    cached = _seoul_rows.get(route_id)
+    if cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+        return cached[1]
+    items = seoul_arrival_items(route_id)
+    _seoul_rows[route_id] = (at, items)
+    return items
+
+
+def seoul_bus_arrival(lat, lon, route_no, now=None):
+    """서울 버스가 그 자리에 언제 오는가. `bus_arrival` 과 **같은 모양**을 돌려준다.
+
+    **정류장을 노선 안에서 고른다.** 한 번 부르면 그 노선의 정류장이 다 오므로,
+    그중 승차 좌표에 가장 가까운 것을 고르면 된다 — 노선이 안 서는 기둥을 고를
+    수가 없다. TAGO 쪽(`arrival_stop`)이 노선을 모른 채 가장 가까운 정류장을
+    골라야 했던 것과 다르다.
+    """
+    at = now or datetime.now(timezone.utc)
+    want = str(route_no).strip()
+    ids = seoul_routes().get(want) or []
+    if not ids:
+        return None
+
+    # `arsId` → 좌표. 서울 정류장 표에서 만든다.
+    index = {stop[3]: (stop[1], stop[2]) for stop in SEOUL_STOPS if len(stop) > 3 and stop[3]}
+
+    for route_id in ids:
+        best = None
+        for item in seoul_arrival_items_cached(route_id, at):
+            ars = _tag(item, "arsId")
+            spot = index.get(ars)
+            if not spot:
+                continue
+            gap = haversine(lat, lon, spot[0], spot[1])
+            if best is None or gap < best[0]:
+                best = (gap, item)
+        # 승차 좌표에서 멀면 이 갈래가 아니다. 저장된 승차점은 정류장 좌표에서
+        # 나온 값이라 수백 m 씩 벌어질 이유가 없다.
+        if not best or best[0] > 500:
+            continue
+
+        item = best[1]
+        try:
+            station_order = int(_tag(item, "staOrd"))
+        except ValueError:
+            continue
+
+        coming = []
+        for n in (1, 2):
+            try:
+                seconds = int(_tag(item, f"traTime{n}"))
+            except ValueError:
+                continue
+            if seconds <= 0:
+                continue
+            try:
+                left = station_order - int(_tag(item, f"sectOrd{n}"))
+            except ValueError:
+                left = None
+            coming.append((seconds, left if left is not None and left >= 0 else None))
+        if not coming:
+            continue
+        coming.sort()
+
+        value = {"no": want, "at": at + timedelta(seconds=coming[0][0]),
+                 "stops": coming[0][1], "measuredAt": at}
+        if len(coming) > 1:
+            value["thenAt"] = at + timedelta(seconds=coming[1][0])
+            value["thenStops"] = coming[1][1]
+        return value
+    return None
+
+
 def bus_arrival(lat, lon, route_no, now=None):
     """그 자리에서 탈 `route_no` 버스가 언제 오는가. 모르면 None.
 
@@ -1104,7 +1243,9 @@ def bus_arrival(lat, lon, route_no, now=None):
     at = now or datetime.now(timezone.utc)
     stop = arrival_stop(lat, lon, now=at)
     if not stop:
-        return None
+        # **서울은 TAGO 에 없다.** 정류장을 못 찾은 자리가 대개 거기다 — 도시코드
+        # 목록에 서울이 아예 없다(2026-08-26 실측). 서울시 TOPIS 로 넘긴다.
+        return seoul_bus_arrival(lat, lon, route_no, now=at)
     city_code, node_id = stop
     want = str(route_no).strip()
 

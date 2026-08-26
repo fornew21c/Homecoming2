@@ -565,5 +565,106 @@ class StringBodyTests(unittest.TestCase):
             self.assertEqual(hs.tago_arrival_rows(31100, "GGB219000638"), [])
 
 
+def seoul_item(ars, sta_ord, tra1=None, sect1=None, tra2=None, sect2=None, msg1="", msg2=""):
+    """`getArrInfoByRouteAll` 응답 한 항목. 실제 응답에서 쓰는 필드만 담는다.
+
+    **글자가 아니라 숫자를 쓴다.** `arrmsg1` 은 `곧 도착` 일 때도 `traTime1` 이
+    85 로 온다(2026-08-27 실측) — 글자를 뜯으면 그런 경우마다 규칙이 는다.
+    """
+    parts = [f"<arsId>{ars}</arsId>", f"<staOrd>{sta_ord}</staOrd>",
+             f"<arrmsg1>{msg1}</arrmsg1>", f"<arrmsg2>{msg2}</arrmsg2>"]
+    if tra1 is not None:
+        parts += [f"<traTime1>{tra1}</traTime1>", f"<sectOrd1>{sect1}</sectOrd1>"]
+    if tra2 is not None:
+        parts += [f"<traTime2>{tra2}</traTime2>", f"<sectOrd2>{sect2}</sectOrd2>"]
+    return "".join(parts)
+
+
+class SeoulArrivalTests(unittest.TestCase):
+    """서울은 TAGO 에 없어서 TOPIS 로 넘어간다.
+
+    TAGO 도시코드 목록에 서울이 아예 없고 좌표로 정류장을 물어도 빈 결과다
+    (2026-08-26 실측). 노선번호 → 노선id 는 구워 둔 표에서 온다 — 그 API 는
+    지금 키로 401 이다.
+    """
+
+    # 국회의사당역.KB국민은행. `seoul-stops.json` 의 실제 값이다.
+    ARS = "19132"
+    LAT, LON = 37.528479, 126.918068
+
+    def setUp(self):
+        hs._seoul_rows.clear()
+        hs._arrival_stops.clear()
+
+    def stops_table(self):
+        return mock.patch.object(hs, "SEOUL_STOPS",
+                                 [["국회의사당역.KB국민은행", self.LAT, self.LON, self.ARS]])
+
+    def routes(self, table=None):
+        return mock.patch.object(hs, "_seoul_routes",
+                                 table if table is not None else {"163": ["100100032"]})
+
+    def test_두_대를_절대시각으로_준다(self):
+        items = [seoul_item("99999", 10, 60, 9),
+                 seoul_item(self.ARS, 60, 85, 60, 377, 59, "곧 도착", "6분17초후[1번째 전]")]
+        with self.stops_table(), self.routes(), mock.patch.object(
+                hs, "seoul_arrival_items", lambda rid: items):
+            got = hs.seoul_bus_arrival(self.LAT, self.LON, "163", now=NOW)
+        self.assertEqual(got["no"], "163")
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=85))
+        self.assertEqual(got["stops"], 0)          # staOrd 60 − sectOrd1 60
+        self.assertEqual(got["thenAt"], NOW + datetime.timedelta(seconds=377))
+        self.assertEqual(got["thenStops"], 1)      # 60 − 59
+        self.assertEqual(got["measuredAt"], NOW)
+
+    def test_곧_도착이라고_적혀_있어도_숫자를_쓴다(self):
+        """`arrmsg1` 을 파싱했다면 `곧 도착` 에서 시각을 못 냈을 것이다."""
+        items = [seoul_item(self.ARS, 60, 85, 60, msg1="곧 도착")]
+        with self.stops_table(), self.routes(), mock.patch.object(
+                hs, "seoul_arrival_items", lambda rid: items):
+            got = hs.seoul_bus_arrival(self.LAT, self.LON, "163", now=NOW)
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=85))
+
+    def test_노선_안에서_가장_가까운_정류장을_고른다(self):
+        """한 번 부르면 그 노선 정류장이 다 온다 — 노선이 안 서는 기둥을 고를 수 없다."""
+        far = ["먼정류장", 37.560000, 126.930000, "11111"]
+        items = [seoul_item("11111", 20, 60, 19), seoul_item(self.ARS, 60, 85, 60)]
+        with mock.patch.object(hs, "SEOUL_STOPS",
+                               [far, ["국회의사당역.KB국민은행", self.LAT, self.LON, self.ARS]]), \
+             self.routes(), mock.patch.object(hs, "seoul_arrival_items", lambda rid: items):
+            got = hs.seoul_bus_arrival(self.LAT, self.LON, "163", now=NOW)
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=85))
+
+    def test_표에_없는_노선이면_안_묻는다(self):
+        asked = []
+        with self.stops_table(), self.routes({}), mock.patch.object(
+                hs, "seoul_arrival_items", lambda rid: asked.append(1) or []):
+            self.assertIsNone(hs.seoul_bus_arrival(self.LAT, self.LON, "163", now=NOW))
+        self.assertEqual(asked, [])
+
+    def test_승차_좌표에서_멀면_그_갈래가_아니다(self):
+        """같은 번호가 여러 id 를 가질 수 있다(01A/01B). 엉뚱한 갈래를 안 쓴다."""
+        items = [seoul_item(self.ARS, 60, 85, 60)]
+        with self.stops_table(), self.routes(), mock.patch.object(
+                hs, "seoul_arrival_items", lambda rid: items):
+            got = hs.seoul_bus_arrival(37.60, 127.05, "163", now=NOW)
+        self.assertIsNone(got)
+
+    def test_TAGO_가_정류장을_못_찾으면_서울로_넘어간다(self):
+        items = [seoul_item(self.ARS, 60, 85, 60)]
+        with self.stops_table(), self.routes(), \
+             mock.patch.object(hs, "nearby_stops", lambda lat, lon, limit=8: []), \
+             mock.patch.object(hs, "seoul_arrival_items", lambda rid: items):
+            got = hs.bus_arrival(self.LAT, self.LON, "163", now=NOW)
+        self.assertEqual(got["no"], "163")
+
+    def test_구워_둔_표에_163_과_6713_이_있다(self):
+        """표가 깨지면 서울이 통째로 조용히 안 뜬다."""
+        table = hs.seoul_routes()
+        self.assertGreater(len(table), 500)
+        self.assertEqual(table.get("163"), ["100100032"])
+        self.assertEqual(table.get("6713"), ["100100293"])
+
+
 if __name__ == "__main__":
     unittest.main()
