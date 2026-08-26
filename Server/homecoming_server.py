@@ -1018,7 +1018,8 @@ def tago_arrival_rows(city_code, node_id):
     if not TAGO_KEY:
         return []
     body = tago_arrival_body(city_code, node_id)
-    if body is None:
+    # 같은 이유로 문자열이 올 수 있다 — `nearby_stops` 주석 참고.
+    if not isinstance(body, dict):
         return []
     items = body.get("items") or {}
     rows = items.get("item") if isinstance(items, dict) else None
@@ -1283,7 +1284,11 @@ def nearby_stops(lat, lon, limit=8):
     if not TAGO_KEY:
         return []
     body = tago_stop_body(lat, lon, limit)
-    if body is None:
+    # **문자열로 올 때가 있다.** 결과가 없으면 이 API 가 `"body": ""` 를 보낸다 —
+    # 그때 `body.get(...)` 이 터진다(2026-08-26, 국회의사당역 좌표로 물었을 때).
+    # 서울 시내버스가 이 자료에 없어서 그 자리에서 늘 빈 응답이 오고, `/stops` 가
+    # 500 을 내며 정류장 목록이 통째로 안 보였다.
+    if not isinstance(body, dict):
         return []
 
     items = body.get("items") or {}

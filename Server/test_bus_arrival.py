@@ -545,5 +545,25 @@ class WaitingAtStopTests(unittest.TestCase):
         self.assertIsNone(hs.next_bus_leg(LEGS, 4300, 37.6915, 126.787167))
 
 
+class StringBodyTests(unittest.TestCase):
+    """응답 `body` 가 **문자열**로 올 때 터지지 않는다.
+
+    결과가 없으면 이 API 가 `"body": ""` 를 보낸다. `body.get(...)` 이 그대로
+    터졌고, `/stops` 가 500 을 내며 정류장 목록이 통째로 안 보였다
+    (2026-08-26, 서울 좌표로 물었을 때 — 서울 시내버스가 이 자료에 없어서
+    그 자리에서는 늘 빈 응답이 온다).
+    """
+
+    def test_정류소_조회가_문자열을_받아도_빈_목록이다(self):
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), \
+             mock.patch.object(hs, "tago_stop_body", lambda lat, lon, limit: ""):
+            self.assertEqual(hs.nearby_stops(37.528330, 126.917660), [])
+
+    def test_도착정보_조회가_문자열을_받아도_빈_목록이다(self):
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), \
+             mock.patch.object(hs, "tago_arrival_body", lambda city, node: ""):
+            self.assertEqual(hs.tago_arrival_rows(31100, "GGB219000638"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
