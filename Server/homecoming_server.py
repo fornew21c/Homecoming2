@@ -1497,6 +1497,21 @@ def content_state(session):
         state["estimateSource"] = "distance"
     else:
         state["estimateSource"] = "offRoute" if session["off_route"] else "route"
+    # **다음에 탈 버스가 언제 오는가.** 승차 15분 전부터만 싣는다.
+    #
+    # **절대시각이다.** `몇 분 뒤` 로 보내면 화면이 그 글자를 들고 멈춘다 —
+    # 정류장에 서서 기다리는 동안은 위치 보고가 없어서 갱신될 길이 푸시뿐이고,
+    # 그 푸시가 늦는 것이 2026-08-25 에 겪은 일이다. 절대시각이면 시계가 흐른다.
+    #
+    # 셋 다 없을 수 있다. 서울 시내버스는 자료가 없어서 늘 없다(2026-08-26 실측).
+    route = route_of(session)
+    if route:
+        arrival = bus_arrival_for(route["legs"], session["route_progress"] or 0)
+        if arrival:
+            state["busArrivalNo"] = arrival["no"]
+            state["busArrivalAt"] = iso(arrival["at"])
+            if arrival["stops"] is not None:
+                state["busArrivalStops"] = arrival["stops"]
     return state
 
 
@@ -2008,6 +2023,45 @@ def leg_at(legs, elapsed):
     진행은 뒤로 가지 않으니 여기서 만든 문구도 뒤로 가지 않는다.
     """
     return legs[leg_index_at(legs, elapsed)] if legs else None
+
+
+# 승차 몇 초 전부터 도착정보를 묻는가.
+#
+# **그 전에는 값이 쓸모없다.** 실측에서 999번이 582초(9.7분) 뒤였고, 15분이면 그
+# 앞의 다음 차까지 들어온다. 창을 넓히면 호출만 늘고 화면에는 "아직 멀었다" 만 뜬다.
+#
+# 호출 예산: 창 15분 × 30초 캐시 = 한 구간에 최대 30회, 버스 두 구간이면 60회.
+# 한도가 10,000/일 이라 여유롭다.
+ARRIVAL_LEAD_SECONDS = 15 * 60
+
+
+def next_bus_leg(legs, progress):
+    """지금 자리 **뒤**의 첫 버스 구간. 없으면 None.
+
+    **타고 있는 버스는 다음이 아니다.** 이미 탄 버스가 언제 오는지는 알 필요가
+    없다. 그래서 지금 구간을 포함하지 않고 그 뒤부터 본다.
+    """
+    if not legs:
+        return None
+    here = leg_index_at(legs, progress)
+    for leg in legs[here + 1:]:
+        if leg.get("mode") == "bus" and leg.get("busNo"):
+            return leg
+    return None
+
+
+def bus_arrival_for(legs, progress, now=None):
+    """다음 버스 구간의 실시간 도착. 창 밖이거나 모르면 None."""
+    leg = next_bus_leg(legs, progress)
+    if not leg:
+        return None
+    left = leg["startsAt"] - progress
+    if left > ARRIVAL_LEAD_SECONDS:
+        return None
+    points = leg.get("points") or []
+    if not points:
+        return None
+    return bus_arrival(points[0][0], points[0][1], leg["busNo"], now=now)
 
 
 def where_on_route(legs, lat, lon, progress):

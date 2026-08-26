@@ -211,5 +211,73 @@ class TagoArrivalBodyNormalizationTests(unittest.TestCase):
         self.assertEqual(rows, [])
 
 
+def leg(mode, starts_at, seconds, to_name, bus_no=None, lat=37.0, lon=127.0):
+    out = {"mode": mode, "startsAt": starts_at, "seconds": seconds,
+           "toName": to_name, "points": [[lat, lon]]}
+    if bus_no:
+        out["busNo"] = bus_no
+    return out
+
+
+# 실제 경로의 모양이다 — 도보·대기·버스·도보·지하철·도보·대기·버스·도보.
+LEGS = [
+    leg("walk", 0, 360, "출발역.은행앞"),
+    leg("wait", 360, 180, None),
+    leg("bus", 540, 540, "환승로터리", bus_no="163", lat=37.528458, lon=126.917876),
+    leg("walk", 1080, 420, "서강대역"),
+    leg("wait", 1500, 270, None),
+    leg("subway", 1770, 1860, "풍산역"),
+    leg("walk", 3630, 390, "풍산역 정류장"),
+    leg("wait", 4020, 120, None),
+    leg("bus", 4140, 600, "아파트단지", bus_no="999",
+        lat=37.673130, lon=126.787047),
+    leg("walk", 4740, 180, "집"),
+]
+
+
+class NextBusLegTests(unittest.TestCase):
+
+    def test_지금_뒤의_첫_버스_구간을_고른다(self):
+        # 지하철을 타는 중(progress 2000초)이면 다음 버스는 999번이다.
+        found = hs.next_bus_leg(LEGS, 2000)
+        self.assertEqual(found["busNo"], "999")
+
+    def test_출발_전에는_첫_버스_구간이다(self):
+        found = hs.next_bus_leg(LEGS, 0)
+        self.assertEqual(found["busNo"], "163")
+
+    def test_타고_있는_버스는_다음이_아니다(self):
+        # 999번을 타는 중(progress 4300초)이면 뒤에 버스 구간이 없다.
+        self.assertIsNone(hs.next_bus_leg(LEGS, 4300))
+
+    def test_버스가_없는_경로면_없다(self):
+        walk_only = [leg("walk", 0, 600, "집")]
+        self.assertIsNone(hs.next_bus_leg(walk_only, 0))
+
+
+class ArrivalWindowTests(unittest.TestCase):
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+        hs._arrival_rows.clear()
+
+    def test_승차까지_15분_넘게_남으면_안_묻는다(self):
+        asked = []
+        with mock.patch.object(hs, "bus_arrival",
+                               lambda *a, **k: asked.append(1)):
+            # 999번 승차가 4140초인데 지금 2000초다 — 2140초(35분) 남았다.
+            got = hs.bus_arrival_for(LEGS, 2000, now=NOW)
+        self.assertEqual(asked, [])
+        self.assertIsNone(got)
+
+    def test_15분_안으로_들어오면_묻는다(self):
+        with mock.patch.object(
+                hs, "bus_arrival",
+                lambda lat, lon, no, now=None: {"no": no, "at": NOW, "stops": 3}):
+            # 3300초면 승차까지 840초(14분) 남았다.
+            got = hs.bus_arrival_for(LEGS, 3300, now=NOW)
+        self.assertEqual(got["no"], "999")
+
+
 if __name__ == "__main__":
     unittest.main()
