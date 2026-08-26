@@ -41,12 +41,19 @@ enum RouteSample {
 
         do {
             var tracer = RouteTracer()
+            tracer.subwayWaypoints = { fromName, toName in
+                await environment.routes.subwayWaypoints(fromName: fromName, toName: toName)
+            }
             tracer.busWaypoints = { no, from, fromName, toName in
                 await environment.routes.busWaypoints(no: no, from: from,
                                                      fromName: fromName, toName: toName)
             }
             let plotted = try await tracer.plot(origin: origin, steps: steps)
             let legs = plotted.legs
+            if !plotted.subwayFallbacks.isEmpty {
+                print("[귀가마중] 노선 자료 없음 — 직선으로 그린 지하철: "
+                      + plotted.subwayFallbacks.joined(separator: ", "))
+            }
             if !plotted.busFallbacks.isEmpty {
                 print("[귀가마중] 노선 자료 없음 — 자동차 경로로 그린 버스: "
                       + plotted.busFallbacks.joined(separator: ", "))

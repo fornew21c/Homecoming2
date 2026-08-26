@@ -678,7 +678,15 @@ def _station_key(name):
 
 
 def _find_station(stations, name):
-    """정규화해서 같은 것을 먼저, 없으면 **포함하는 것**을 쓴다."""
+    """정규화해서 같은 것을 먼저, 없으면 포함 관계를 **양쪽으로** 본다.
+
+    한쪽만 보면 안 된다. 실제로 걸렸다(2026-08-26) — 경로에 적힌 이름이
+    `서강대학교` 인데 자료의 역사명은 `서강대역` 이라, "자료 이름이 찾는 이름을
+    포함하는가" 만 보면 `서강대학교` ⊄ `서강대` 라서 못 찾는다.
+
+    반대 방향(찾는 이름이 자료 이름을 포함)은 헐거워서 짧은 역 이름에 잘못 걸릴 수
+    있다(`서울대입구` 안에 `서울` 이 있다). 그래서 **가장 긴 것**을 고른다.
+    """
     want = _station_key(name)
     if not want:
         return None
@@ -688,7 +696,12 @@ def _find_station(stations, name):
     for index, station in enumerate(stations):
         if want in _station_key(station["이름"]):
             return index
-    return None
+    best = None
+    for index, station in enumerate(stations):
+        key = _station_key(station["이름"])
+        if key and key in want and (best is None or len(key) > best[1]):
+            best = (index, len(key))
+    return best[0] if best else None
 
 
 def subway_leg_stops(from_name, to_name):

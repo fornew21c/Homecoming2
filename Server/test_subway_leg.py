@@ -45,6 +45,14 @@ class SubwayLegTests(unittest.TestCase):
         self.assertEqual(line, "경의중앙선")
         self.assertEqual(len(stops), 12)
 
+    def test_경로에_적힌_이름이_더_길어도_찾는다(self):
+        """경로의 그 구간 이름은 `서강대학교` 인데 자료의 역사명은 `서강대역` 이다.
+        2026-08-26 에 이것 때문에 지하철 구간이 조용히 직선으로 저장됐다."""
+        line, stops = hs.subway_leg_stops("서강대학교", "풍산역")
+        self.assertEqual(line, "경의중앙선")
+        self.assertEqual(stops[0]["name"], "서강대역")
+        self.assertEqual(len(stops), 12)
+
     def test_좌표가_함께_온다(self):
         _, stops = hs.subway_leg_stops("서강대역", "풍산역")
         for stop in stops:

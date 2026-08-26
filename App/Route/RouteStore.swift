@@ -65,6 +65,12 @@ final class RouteStore {
                                               fromName: fromName, toName: toName)) ?? []
     }
 
+    /// 지하철 한 구간이 지나는 역 좌표. 실패하면 빈 배열 — 그때는 두 역 직선이다.
+    func subwayWaypoints(fromName: String, toName: String) async -> [CLLocationCoordinate2D] {
+        guard isAvailable else { return [] }
+        return (try? await client.subwayWaypoints(fromName: fromName, toName: toName)) ?? []
+    }
+
     // MARK: - 저장
 
     /// 경로를 저장하고 그 id 를 돌려준다. 실패하면 nil 이고 `lastError` 에 이유가 남는다.

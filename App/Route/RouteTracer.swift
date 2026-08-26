@@ -92,6 +92,14 @@ struct RouteTracer {
     var busWaypoints: ((_ no: String, _ from: CLLocationCoordinate2D,
                         _ fromName: String, _ toName: String) async -> [CLLocationCoordinate2D])?
 
+    /// 지하철 구간이 지나는 **역** 좌표를 물어 준다. nil 이면 두 역 직선으로 그린다.
+    ///
+    /// 실제 선로는 직선이 아니다. 서강대 → 풍산에서 직선이 실제 노선에서 **1,994m**
+    /// 까지 벌어졌고(능곡역, 2026-08-26 실측), 이탈 문턱이 1,000m 라 정상 귀가가
+    /// 이탈로 판정됐다 — 2026-08-25 실주행에서 그 뒤 39분을 이탈 상태로 돌았다.
+    var subwayWaypoints: ((_ fromName: String, _ toName: String)
+                          async -> [CLLocationCoordinate2D])?
+
     /// 그린 결과. **폴백을 함께 돌려준다.**
     ///
     /// 버스 노선 자료를 못 찾으면 자동차 경로로 그린다. 그건 "없는 길을 그리는 것"
@@ -102,12 +110,15 @@ struct RouteTracer {
         var legs: [RouteLeg]
         /// 실제 노선을 못 찾아 자동차 경로로 그린 버스 구간의 노선번호.
         var busFallbacks: [String] = []
+        /// 노선을 못 찾아 두 역 직선으로 그린 지하철 구간의 도착역 이름.
+        var subwayFallbacks: [String] = []
     }
 
     func plot(origin: CLLocationCoordinate2D, steps: [Step]) async throws -> Plotted {
         guard !steps.isEmpty else { throw TraceError.noSteps }
 
         var fallbacks: [String] = []
+        var subwayFallbacks: [String] = []
         var legs: [RouteLeg] = []
         var cursor = origin
         var startsAt = 0
@@ -130,9 +141,13 @@ struct RouteTracer {
                 let traced = try await trace(step, from: cursor, to: destination,
                                              fromName: previousName)
                 points = traced.points
-                if traced.fellBack, let no = step.busNo?.trimmingCharacters(in: .whitespaces),
-                   !no.isEmpty {
-                    fallbacks.append(no)
+                if traced.fellBack {
+                    if step.mode == .subway {
+                        subwayFallbacks.append(step.toName)
+                    } else if let no = step.busNo?.trimmingCharacters(in: .whitespaces),
+                              !no.isEmpty {
+                        fallbacks.append(no)
+                    }
                 }
                 cursor = destination
             }
@@ -151,7 +166,7 @@ struct RouteTracer {
             }
         }
 
-        return Plotted(legs: legs, busFallbacks: fallbacks)
+        return Plotted(legs: legs, busFallbacks: fallbacks, subwayFallbacks: subwayFallbacks)
     }
 
     /// 구간 하나의 좌표열. 버스에 노선번호가 있으면 그 노선을 따라 그린다.
@@ -165,6 +180,18 @@ struct RouteTracer {
         to: CLLocationCoordinate2D,
         fromName: String
     ) async throws -> (points: [[Double]], fellBack: Bool) {
+
+        if step.mode == .subway, let ask = subwayWaypoints {
+            let stations = await ask(fromName, step.toName)
+            if stations.count >= 2 {
+                return (through(stations, from: from, to: to), false)
+            }
+            // 두 역이 함께 있는 노선을 못 찾았거나, 찾았는데 이어지지 않았다.
+            // 예전처럼 직선으로 그리되 **조용히 하지 않는다.**
+            HomecomingLog.push.warning(
+                "지하철 \(step.toName, privacy: .public) 노선 자료가 없다 — 직선으로 그린다")
+            return (straight(from: from, to: to), true)
+        }
 
         guard step.mode == .bus, let no = step.busNo?.trimmingCharacters(in: .whitespaces),
               !no.isEmpty, let ask = busWaypoints
@@ -271,6 +298,27 @@ struct RouteTracer {
         return coords.map {
             [($0.latitude * 1e6).rounded() / 1e6, ($0.longitude * 1e6).rounded() / 1e6]
         }
+    }
+
+    /// 역 좌표들을 순서대로 잇고 사이를 보간한다.
+    ///
+    /// **양 끝은 요청받은 좌표로 맞춘다.** 자료의 역 좌표와 경로가 든 좌표가 몇십
+    /// 미터 다를 수 있는데, 그대로 두면 구간 사이에 틈이 생겨 다음 구간이 다른
+    /// 자리에서 시작한다 — `ending(_:at:)` 이 막는 것과 같은 문제다.
+    private func through(
+        _ stations: [CLLocationCoordinate2D],
+        from: CLLocationCoordinate2D,
+        to: CLLocationCoordinate2D
+    ) -> [[Double]] {
+        var nodes = stations
+        nodes[0] = from
+        nodes[nodes.count - 1] = to
+        var points: [[Double]] = []
+        for index in 0..<(nodes.count - 1) {
+            let piece = straight(from: nodes[index], to: nodes[index + 1])
+            points += (index == 0) ? piece : Array(piece.dropFirst())
+        }
+        return points
     }
 
     private func straight(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> [[Double]] {

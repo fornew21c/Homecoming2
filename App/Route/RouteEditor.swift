@@ -267,6 +267,9 @@ struct RouteEditor: View {
             var tracer = RouteTracer()
             // 버스 구간에 노선번호가 있으면 그 노선이 지나는 정류장을 물어 온다.
             // 서버만 공공데이터 키를 갖고 있으므로 이쪽으로 나간다.
+            tracer.subwayWaypoints = { [store] fromName, toName in
+                await store.subwayWaypoints(fromName: fromName, toName: toName)
+            }
             tracer.busWaypoints = { [store] no, from, fromName, toName in
                 await store.busWaypoints(no: no, from: from,
                                          fromName: fromName, toName: toName)
@@ -285,12 +288,24 @@ struct RouteEditor: View {
             // 저장은 성공했고 경로는 쓸 수 있다. 다만 그 구간의 선은 실제 노선이
             // 아니라 자동차 길이다 — 가족 지도에 그려질 모양이 실제로 버스가 가는
             // 길과 다르다. 조용히 닫으면 그 사실이 아무 데도 남지 않는다.
-            if plotted.busFallbacks.isEmpty {
+            //
+            // 지하철도 같다. 두 역이 함께 있는 노선을 못 찾으면 두 역 직선으로
+            // 그리는데, 실제 선로가 거기서 1km 넘게 벗어날 수 있다(2026-08-25
+            // 실주행에서 그것 때문에 이탈로 오판됐다).
+            var reasons: [String] = []
+            if !plotted.busFallbacks.isEmpty {
+                reasons.append("\(plotted.busFallbacks.joined(separator: ", "))번 버스 노선 자료를"
+                               + " 못 찾아 자동차 경로로 그렸습니다")
+            }
+            if !plotted.subwayFallbacks.isEmpty {
+                reasons.append("\(plotted.subwayFallbacks.joined(separator: ", ")) 구간의 지하철"
+                               + " 노선을 못 찾아 두 역을 직선으로 그렸습니다")
+            }
+            if reasons.isEmpty {
                 dismiss()
             } else {
-                let numbers = plotted.busFallbacks.joined(separator: ", ")
-                notice = "저장했습니다. 다만 \(numbers)번 노선 자료를 못 찾아 그 구간은"
-                    + " 자동차 경로로 그렸습니다 — 지도의 선 모양이 실제 노선과 다를 수 있어요."
+                notice = "저장했습니다. 다만 " + reasons.joined(separator: ", 그리고 ")
+                    + " — 지도의 선 모양이 실제 노선과 다를 수 있어요."
             }
         } catch {
             failure = error.localizedDescription
