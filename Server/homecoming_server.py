@@ -22,6 +22,7 @@ import base64
 import json
 import math
 import os
+import pathlib
 import ssl
 import sqlite3
 import shutil
@@ -627,6 +628,106 @@ BUS_SGG = {
         "41550",                              # 안성시
     ],
 }
+
+
+# ------------------------------------------------------------------ 지하철
+
+SUBWAY_LINES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "subway-lines.json"
+_subway_lines = None
+
+# 고른 구간이 **되돌아가는지** 보는 문턱. 경로 길이 / 두 끝 직선거리.
+#
+# 역번호는 노선 전체가 아니라 블록 안에서만 순서다. 경의중앙선은 지선(서울역·신촌)과
+# 옛 코드 블록이 섞여 있어서 전체를 한 줄로 세우면 되돌아간다. 블록을 넘어 고르면
+# 노선 밖으로 나갔다 돌아오느라 이 비가 폭발한다 — 지평 → 신촌은 58km 를 건너뛴다.
+#
+# 정상 구간은 1에 가깝다: 서강대 → 풍산이 19.5km / 18.7km = **1.04**(2026-08-26 실측).
+# 2.0 은 여유다 — 실제 노선도 곧게만 가지는 않는다.
+SUBWAY_DETOUR_LIMIT = 2.0
+
+# **비만으로는 못 잡는다.** 건너뛴 방향이 가려는 방향과 같으면 비가 안 커진다 —
+# 지평 → 서울역(경의선) → 신촌은 58km 를 건너뛰는데도 비가 1.02 다(시험이 잡아냈다).
+# 그래서 이웃 간격도 본다. 지하철 역 사이가 이만큼 떨어지지는 않는다.
+#
+# 2026-08-26 실측 분포(이웃 쌍 1,053개): 중앙값 1,093m · 95% 5,618m · 98% 13,965m.
+# 정상인데 긴 구간이 있다 — 인천국제공항선 청라국제도시→영종 10.1km, 동해선
+# 일광→부산원동 13.6km. 그건 살리고 블록 점프(25km 이상)만 걸러야 해서 15km 로 둔다.
+SUBWAY_MAX_GAP_METERS = 15_000
+
+
+def subway_lines():
+    """구워 둔 역 표. 한 번 읽고 들고 있는다."""
+    global _subway_lines
+    if _subway_lines is None:
+        try:
+            _subway_lines = json.loads(SUBWAY_LINES_PATH.read_text(encoding="utf-8"))
+        except OSError:
+            log("  지하철 역 표가 없다 — 지하철 구간은 직선으로 그려진다")
+            _subway_lines = {}
+    return _subway_lines
+
+
+def _station_key(name):
+    """이름을 맞추기 위한 정규화. 공백·가운뎃점을 빼고 끝의 `역` 을 뗀다.
+
+    앱의 경로는 `서강대학교`·`풍산역` 인데 자료의 역사명은 `서강대역`·`풍산역` 이다.
+    버스의 `stops_by_name` 이 같은 문제를 같은 방법으로 풀었다.
+    """
+    key = "".join((name or "").split()).replace("·", "").replace(".", "")
+    return key[:-1] if key.endswith("역") and len(key) > 1 else key
+
+
+def _find_station(stations, name):
+    """정규화해서 같은 것을 먼저, 없으면 **포함하는 것**을 쓴다."""
+    want = _station_key(name)
+    if not want:
+        return None
+    for index, station in enumerate(stations):
+        if _station_key(station["이름"]) == want:
+            return index
+    for index, station in enumerate(stations):
+        if want in _station_key(station["이름"]):
+            return index
+    return None
+
+
+def subway_leg_stops(from_name, to_name):
+    """두 역 사이의 역들을 순서대로. 돌려주는 것 — (노선명, [{name, lat, lon}]).
+
+    못 찾으면 `(None, [])` 다. **오류가 아니다** — 앱은 그때 지금처럼 두 역 직선으로
+    그리고 그 사실을 화면에 적는다. 짐작해서 엉뚱한 역을 넣지 않는다. 틀린 폴리라인은
+    직선보다 나쁘다 — 직선은 최소한 틀린 줄 알지만 그건 맞는 것처럼 보인다.
+    """
+    best = None
+    for line in subway_lines().values():
+        stations = line["역"]
+        start = _find_station(stations, from_name)
+        end = _find_station(stations, to_name)
+        if start is None or end is None or start == end:
+            continue
+        span = stations[start:end + 1] if start < end else stations[end:start + 1][::-1]
+        if best is None or len(span) < len(best[1]):
+            best = (line["이름"], span)
+    if best is None:
+        return None, []
+
+    name, span = best
+    gaps = [haversine(span[i]["lat"], span[i]["lon"],
+                      span[i + 1]["lat"], span[i + 1]["lon"])
+            for i in range(len(span) - 1)]
+    if max(gaps) > SUBWAY_MAX_GAP_METERS:
+        log(f"  지하철 {name} {from_name} → {to_name}: 역 사이가 "
+            f"{int(max(gaps))}m 벌어진다 — 자료 없음으로 둔다")
+        return None, []
+
+    along = sum(gaps)
+    straight = haversine(span[0]["lat"], span[0]["lon"], span[-1]["lat"], span[-1]["lon"])
+    if straight <= 0 or along / straight > SUBWAY_DETOUR_LIMIT:
+        log(f"  지하철 {name} {from_name} → {to_name}: 이어지지 않는다 "
+            f"(경로 {int(along)}m / 직선 {int(straight)}m) — 자료 없음으로 둔다")
+        return None, []
+
+    return name, [{"name": s["이름"], "lat": s["lat"], "lon": s["lon"]} for s in span]
 
 
 def bus_opr_ymd():
@@ -2240,6 +2341,19 @@ class Handler(BaseHTTPRequestHandler):
             log(f"  버스 {route_no} {from_name or '?'} → {to_name}: "
                 f"경유 정류장 {len(points)}개{note}")
             return self.reply(200, {"points": points, "missing": missing})
+
+        # 지하철 구간의 경유 역. `/bus/leg` 와 같은 자리, 같은 계약이다 —
+        # 빈 결과는 실패가 아니고, 앱은 그때 두 역 직선으로 그리며 그 사실을 화면에 적는다.
+        if path.startswith("/subway/leg"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
+            from_name = (query.get("from", [""])[0] or "").strip()
+            to_name = (query.get("to", [""])[0] or "").strip()
+            if not from_name or not to_name:
+                return self.reply(400, {"error": "from/to 가 필요합니다"})
+            line, stops = subway_leg_stops(from_name, to_name)
+            if line:
+                log(f"  지하철 {line} {from_name} → {to_name}: 경유 역 {len(stops)}개")
+            return self.reply(200, {"line": line, "stops": stops})
 
         if path.startswith("/stops"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
