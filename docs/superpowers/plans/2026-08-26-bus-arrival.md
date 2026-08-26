@@ -728,6 +728,275 @@ git commit -m "다음 버스 도착을 상태에 싣는다 — 승차 15분 전�
 
 ---
 
+### Task 3b: `content_state()` 가 기다리지 않게 한다
+
+**왜 이 작업이 생겼나.** Task 3 을 만들고 나서 재봤더니 `content_state()` 가
+네트워크를 기다리는 함수가 돼 있었다(2026-08-26 실측).
+
+```
+정류장 조회 (풍산역)            4,078 ms
+정류장 조회 (서울 163)          2,592 ms   결과 0개
+bus_arrival 999  (캐시 없음)    8,952 ms
+bus_arrival 163  (서울)        12,883 ms
+  163 두 번째                   4,409 ms   ← 실패가 캐시되지 않는다
+```
+
+앱의 위치 보고 타임아웃은 **8초**다(`App/Session/SessionReporting.swift:115`).
+`handle_location` 은 `content_state` 를 **두 번** 부른다. 163 구간의 창은 출발
+직후 열리고(승차 540초 < 창 900초) 서울은 늘 실패하므로, 귀가 내내 보고마다
+4.4초씩 두 번이 얹힌다. 앱은 8초에 포기한다.
+
+**이 기능이 자기가 기대는 길을 부순다** — 위치 보고 응답으로 상태를 받는 것이
+푸시 지연 우회로인데, 그 응답을 이 기능이 늦춘다.
+
+**Files:**
+- Modify: `Server/homecoming_server.py` (`arrival_stop`, `bus_arrival_for`,
+  `content_state`, `update_activities`, `handle_location`)
+- Test: `Server/test_bus_arrival.py`
+
+- [ ] **Step 1: 실패하는 시험을 쓴다**
+
+`Server/test_bus_arrival.py` 에 붙인다.
+
+```python
+class NonBlockingTests(unittest.TestCase):
+    """`content_state()` 는 네트워크를 기다리지 않는다.
+
+    앱의 위치 보고 타임아웃이 8초인데 도착 조회가 실측 9~13초다. 기다리면
+    귀가자 화면이 응답으로 상태를 받는 길이 끊긴다.
+    """
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+        hs._arrival_rows.clear()
+        hs._arrival_ready.clear()
+        hs._arrival_refreshing.clear()
+
+    def test_캐시가_비면_안_싣고_넘어간다(self):
+        """느린 조회를 배경으로 미룬다 — 그 자리에서 기다리지 않는다."""
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertIsNone(got)
+        # 다음 번을 위해 배경 갱신을 시켰다.
+        self.assertEqual(len(started), 1)
+
+    def test_캐시에_있으면_그걸_준다(self):
+        value = {"no": "999", "at": NOW, "stops": 3}
+        hs._arrival_ready[("999", 37.673130, 126.787047)] = (NOW, value)
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertEqual(got["no"], "999")
+        # 아직 신선하니 갱신도 안 시킨다.
+        self.assertEqual(started, [])
+
+    def test_창_밖이면_배경_갱신도_안_시킨다(self):
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 2000, now=NOW)
+        self.assertIsNone(got)
+        self.assertEqual(started, [])
+
+
+class NegativeStopCacheTests(unittest.TestCase):
+    """정류장을 못 찾은 것도 캐시한다 — 서울이 매번 4.4초를 태웠다."""
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+
+    def test_못_찾은_것도_기억한다(self):
+        calls = []
+
+        def none(lat, lon, limit=8):
+            calls.append(1)
+            return []
+
+        with mock.patch.object(hs, "nearby_stops", none):
+            hs.arrival_stop(37.528330, 126.917660, now=NOW)
+            hs.arrival_stop(37.528330, 126.917660, now=NOW)
+        self.assertEqual(len(calls), 1)
+
+    def test_10분_뒤에는_다시_본다(self):
+        """일시적 장애일 수도 있다. 영원히 포기하지는 않는다."""
+        calls = []
+
+        def none(lat, lon, limit=8):
+            calls.append(1)
+            return []
+
+        with mock.patch.object(hs, "nearby_stops", none):
+            hs.arrival_stop(37.528330, 126.917660, now=NOW)
+            hs.arrival_stop(37.528330, 126.917660,
+                            now=NOW + datetime.timedelta(minutes=10))
+        self.assertEqual(len(calls), 2)
+```
+
+- [ ] **Step 2: 시험이 실패하는 것을 본다**
+
+```bash
+cd Server && python3 -m unittest test_bus_arrival -v
+```
+
+기대: `AttributeError: module 'homecoming_server' has no attribute '_arrival_ready'`
+
+- [ ] **Step 3: 실패도 캐시한다**
+
+`arrival_stop` 을 고친다. 지금은 못 찾으면 아무것도 기억하지 않아서 다음 호출이
+같은 값을 다시 물어본다.
+
+`bus_arrival` 위쪽, `ARRIVAL_CACHE_SECONDS` 옆에 넣는다.
+
+```python
+# 정류장을 못 찾았을 때 다시 묻기까지. 못 찾은 것은 대개 영구적이다 — 서울
+# 시내버스가 이 자료에 없기 때문이고, 그건 10분 뒤에도 그대로다.
+#
+# 그래도 영원히 포기하지는 않는다. 일시적 장애와 구분이 안 되기 때문이다.
+# 10분이면 귀가 한 번(72분)에 최대 7회로 묶인다 — 캐시가 없던 동안은 위치
+# 보고마다였고, 한 번에 4.4초였다(2026-08-26 실측).
+ARRIVAL_STOP_RETRY_SECONDS = 10 * 60
+```
+
+`arrival_stop(lat, lon, now=None)` 로 바꾸고, `_arrival_stops` 에
+`(잰 시각, 값 또는 None)` 을 넣는다. 값이 `None` 이고 `ARRIVAL_STOP_RETRY_SECONDS`
+가 안 지났으면 그대로 `None` 을 돌려주고 조회하지 않는다. 값이 있으면 시각과
+무관하게 그대로 쓴다 — 정류장 자리는 안 바뀐다.
+
+`bus_arrival` 이 `arrival_stop(lat, lon, now=at)` 로 부르도록 같이 고친다.
+
+기존 시험 `test_정류장을_한_번_고르면_다시_안_찾는다` 가 `_arrival_stops` 의 값
+모양을 안 보고 호출 횟수만 세므로 그대로 통과해야 한다. 안 통과하면 보고한다.
+
+- [ ] **Step 4: 배경 갱신을 만든다**
+
+`bus_arrival_for` 옆에 넣는다.
+
+```python
+# 배경으로 채워 둔 도착값. (노선번호, 승차위도, 승차경도) → (잰 시각, 값 또는 None)
+_arrival_ready = {}
+
+# 지금 배경에서 채우는 중인 키. 같은 것을 여러 번 띄우지 않는다.
+_arrival_refreshing = set()
+_arrival_lock = threading.Lock()
+
+
+def start_arrival_refresh(route_no, lat, lon):
+    """도착값을 배경에서 채운다. **기다리지 않는다.**
+
+    이 파일이 이미 `threading.Thread(daemon=True)` 를 이렇게 쓴다 — 세션 시작의
+    액티비티 생성, 종료 처리, 노선표 예열이 전부 같은 모양이다.
+    """
+    key = (str(route_no), lat, lon)
+    with _arrival_lock:
+        if key in _arrival_refreshing:
+            return
+        _arrival_refreshing.add(key)
+
+    def fill():
+        try:
+            value = bus_arrival(lat, lon, route_no)
+            _arrival_ready[key] = (datetime.now(timezone.utc), value)
+        except Exception as error:                          # noqa: BLE001
+            log(f"  버스 도착 배경 갱신 실패: {error!r}")
+        finally:
+            with _arrival_lock:
+                _arrival_refreshing.discard(key)
+
+    threading.Thread(target=fill, daemon=True).start()
+
+
+def arrival_ready(legs, progress, now=None):
+    """다음 버스의 도착값 — **캐시에 있는 것만.** 없으면 None 이고 배경에서 채운다.
+
+    **여기서 기다리면 안 된다.** 앱의 위치 보고 타임아웃이 8초인데 도착 조회가
+    실측 9~13초다(2026-08-26). 기다리면 귀가자 화면이 위치 보고 응답으로 상태를
+    받는 길이 끊기고, 그 길은 푸시 지연을 우회하려고 만든 것이다.
+
+    첫 보고에는 값이 없고 그다음부터 있다. 모르는 것을 기다리게 하느니 안 그린다.
+    """
+    at = now or datetime.now(timezone.utc)
+    leg = next_bus_leg(legs, progress)
+    if not leg:
+        return None
+    if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
+        return None
+    points = leg.get("points") or []
+    if not points:
+        return None
+    lat, lon = points[0][0], points[0][1]
+    key = (str(leg["busNo"]), lat, lon)
+    cached = _arrival_ready.get(key)
+    if cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+        return cached[1]
+    start_arrival_refresh(leg["busNo"], lat, lon)
+    return cached[1] if cached else None
+```
+
+**낡은 값을 그대로 주는 것이 맞다.** 절대시각이라 스스로 늙는다 — 30초 지난 값도
+`18:42 도착` 은 여전히 참이고, 배경 갱신이 곧 새 값으로 바꾼다.
+
+- [ ] **Step 5: `content_state()` 가 그걸 쓰게 한다**
+
+`content_state()` 의 `bus_arrival_for(...)` 를 `arrival_ready(...)` 로 바꾼다.
+나머지 세 줄(`busArrivalNo` · `busArrivalAt` · `busArrivalStops`)은 그대로다.
+
+주석에 한 줄 더한다.
+
+```python
+    # **여기서 기다리지 않는다.** 캐시에 있는 것만 싣고 없으면 배경에서 채운다 —
+    # 조회가 실측 9~13초인데 앱의 위치 보고 타임아웃이 8초다(2026-08-26).
+```
+
+`bus_arrival_for` 는 남겨 둔다 — 시험이 창 판정을 그것으로 재고 있고
+`arrival_ready` 가 같은 판정을 쓴다.
+
+- [ ] **Step 6: `handle_location` 의 두 번 호출을 한 번으로**
+
+`handle_location` 이 `update_activities(session, alert)` 안에서 한 번, 응답에서
+한 번 `content_state(session)` 를 만든다. 한 번만 만들어 나눠 쓴다 —
+`start_activities` 가 이미 "루프 밖에서 한 번만 구해 나눠 쓴다" 고 같은 일을 한다.
+
+`update_activities(session, alert=None, state=None)` 로 바꿔 받은 것이 있으면
+그걸 쓰게 하고, `handle_location` 에서 이렇게 고친다.
+
+```python
+        state = content_state(session)
+        update_activities(session, alert, state=state)
+        ...
+        return self.reply(200, {"ok": True, "state": state})
+```
+
+`update_activities` 의 다른 호출부는 `state` 를 안 넘기므로 그대로 돈다.
+
+- [ ] **Step 7: 시험**
+
+```bash
+cd Server && python3 -m unittest discover
+```
+
+기대: `OK`, 실패 0.
+
+- [ ] **Step 8: `content_state` 가 정말 안 기다리는지 잰다**
+
+`Tools` 없이 서버 모듈만 띄워 `arrival_ready` 를 세 번 부르고 시간을 잰다.
+사이에 6초를 쉬어 배경 갱신이 끝날 틈을 준다.
+
+기대: **매번 1ms 안쪽.** 첫 회는 `None`, 배경이 채운 뒤로는 값이 나온다.
+어느 한 번이라도 100ms 를 넘으면 아직 기다리고 있는 것이다. 실제로 잰 값을
+보고에 적는다.
+
+- [ ] **Step 9: 커밋**
+
+```bash
+git add Server/homecoming_server.py Server/test_bus_arrival.py
+git commit -m "content_state 가 도착 조회를 기다리지 않는다 — 배경으로 미룬다"
+```
+
+---
+
 ### Task 4: 앱 — `ContentState` 에 필드 셋
 
 **Files:**
