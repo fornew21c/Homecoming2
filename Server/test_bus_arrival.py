@@ -40,5 +40,119 @@ class NearbyStopsTests(unittest.TestCase):
         self.assertEqual(stops[0]["city"], 31100)
 
 
+def arrival_row(route_no, seconds, stops_left):
+    """`getSttnAcctoArvlPrearngeInfoList` 응답 한 줄."""
+    return {"routeno": route_no, "arrtime": seconds,
+            "arrprevstationcnt": stops_left, "routetp": "일반버스"}
+
+
+# 2026-08-26 실측. 풍산역(GGB219000638, 고양 31100)에 오는 버스들.
+PUNGSAN_ROWS = [
+    arrival_row("999", 582, 6),
+    arrival_row("81", 1217, 14),
+    arrival_row("81", 1790, 21),
+    arrival_row("87", 197, 3),
+    arrival_row("96", 2326, 20),
+    arrival_row("96", 402, 6),
+]
+
+# 999번을 타는 자리. `Tools/routes/commute-sample.json` 의 버스 구간 첫 점이다.
+BOARD_LAT, BOARD_LON = 37.673130, 126.787047
+
+NOW = datetime.datetime(2026, 8, 26, 18, 32, 18, tzinfo=datetime.timezone.utc)
+
+
+class BusArrivalTests(unittest.TestCase):
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+        hs._arrival_rows.clear()
+
+    def stops(self, *rows):
+        return mock.patch.object(hs, "nearby_stops", lambda lat, lon, limit=8: list(rows))
+
+    def near(self):
+        """풍산역 정류장 셋. 가까운 순서가 아니라 섞어 둔다."""
+        return self.stops(
+            {"id": "GGB219001069", "name": "풍산역", "lat": 37.6734167,
+             "lon": 126.7872333, "city": 31100},
+            {"id": "GGB219000638", "name": "풍산역", "lat": 37.67315,
+             "lon": 126.7872167, "city": 31100},
+            {"id": "GGB219000608", "name": "풍산역", "lat": 37.67385,
+             "lon": 126.7860333, "city": 31100},
+        )
+
+    def test_그_노선만_골라_절대시각으로_준다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows", lambda city, node: PUNGSAN_ROWS):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertEqual(got["no"], "999")
+        self.assertEqual(got["stops"], 6)
+        # 582초 뒤다.
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=582))
+
+    def test_같은_노선이_여러_대면_가장_빠른_것(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows", lambda city, node: PUNGSAN_ROWS):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "96", now=NOW)
+        # 96번은 2326초와 402초 두 대다.
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=402))
+        self.assertEqual(got["stops"], 6)
+
+    def test_가장_가까운_정류장을_고른다(self):
+        seen = []
+
+        def rows(city, node):
+            seen.append(node)
+            return PUNGSAN_ROWS
+
+        with self.near(), mock.patch.object(hs, "tago_arrival_rows", rows):
+            hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        # 승차 좌표에서 가장 가까운 것이 GGB219000638 이다(실측 약 15m,
+        # 다음 후보가 약 32m). 목록 순서가 아니라 거리로 골라야 한다.
+        self.assertEqual(seen[0], "GGB219000638")
+
+    def test_그_노선이_안_오면_아무것도_안_준다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows", lambda city, node: PUNGSAN_ROWS):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "163", now=NOW)
+        self.assertIsNone(got)
+
+    def test_정류장을_못_찾으면_아무것도_안_준다(self):
+        """서울 시내버스가 이 자리다 — 좌표로 물어도 빈 결과가 온다(2026-08-26 실측)."""
+        with self.stops(), mock.patch.object(
+                hs, "tago_arrival_rows", lambda city, node: PUNGSAN_ROWS):
+            got = hs.bus_arrival(37.528330, 126.917660, "163", now=NOW)
+        self.assertIsNone(got)
+
+    def test_호출이_실패해도_터지지_않는다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows", lambda city, node: []):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertIsNone(got)
+
+    def test_이미_지난_차는_버린다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows",
+                lambda city, node: [arrival_row("999", -30, 0),
+                                    arrival_row("999", 240, 2)]):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=240))
+
+    def test_정류장을_한_번_고르면_다시_안_찾는다(self):
+        calls = []
+
+        def stops(lat, lon, limit=8):
+            calls.append(1)
+            return [{"id": "GGB219000638", "name": "풍산역", "lat": 37.67315,
+                     "lon": 126.7872167, "city": 31100}]
+
+        with mock.patch.object(hs, "nearby_stops", stops), mock.patch.object(
+                hs, "tago_arrival_rows", lambda city, node: PUNGSAN_ROWS):
+            hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+            hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

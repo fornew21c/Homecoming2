@@ -946,6 +946,140 @@ def bus_leg_waypoints(route_no, from_lat, from_lon, to_name, from_name=None):
     return [], []
 
 
+# --- 버스 실시간 도착 ------------------------------------------------------
+#
+# **왜 필요한가** — 경로에 적힌 `버스 10분` 은 저장할 때 잰 예정이다. 지금 그
+# 버스가 어디 있다는 뜻이 아니라, 풍산역에 내리면 다른 지도 앱을 켜게 된다.
+#
+# **서비스가 따로다.** 정류소·노선과 같은 TAGO 인데 활용신청을 따로 받는다.
+# 신청 전에는 같은 키로도 `403 SERVICE_KEY_IS_NOT_REGISTERED_ERROR` 가 온다
+# (2026-08-26 에 실제로 겪었다 — 키가 죽은 줄 알기 쉽다).
+#   https://www.data.go.kr/data/15098530/openapi.do
+#
+# **한도는 개발계정 10,000/일.** 정류소·노선 서비스(1,000)보다 열 배다.
+#
+# **서울 시내버스는 없다.** 163번 타는 곳(37.528330,126.917660) 좌표로 정류장을
+# 조회하면 빈 결과다(2026-08-26 실측). 노선 자료의 구멍과 같은 자리다. 서울은
+# 서울시 TOPIS(`ws.bus.go.kr`)에 있는데 별도 신청이 필요하다 — 지금 키로는 401 이다.
+BUS_ARRIVAL = ("https://apis.data.go.kr/1613000/ArvlInfoInqireService"
+               "/getSttnAcctoArvlPrearngeInfoList")
+
+# 승차 좌표 → (도시코드, 정류장 id). 정류장은 세션 중에 바뀌지 않으니 영구 캐시다.
+_arrival_stops = {}
+
+# (도시코드, 정류장 id) → (잰 시각, 응답 줄들). 30초.
+_arrival_rows = {}
+
+# 도착정보를 얼마나 오래 재사용하는가. 짧을수록 정확하지만 호출이 는다.
+# 30초면 승차 15분 전부터 한 구간에 최대 30회다(아래 `ARRIVAL_LEAD_SECONDS` 참고).
+ARRIVAL_CACHE_SECONDS = 30
+
+
+def tago_arrival_rows(city_code, node_id):
+    """그 정류장에 오는 버스들. 실패하면 빈 목록.
+
+    **빈 목록은 실패가 아니다.** 막차가 끊겼거나, 자료에 없는 정류장이거나,
+    호출이 실패한 것이다. 부르는 쪽은 그때 값을 안 싣고 화면은 줄을 안 그린다 —
+    `/bus/leg` · `/subway/leg` 와 같은 계약이다.
+    """
+    if not TAGO_KEY:
+        return []
+    query = urllib.parse.urlencode({
+        "serviceKey": TAGO_KEY, "cityCode": city_code, "nodeId": node_id,
+        "numOfRows": 100, "pageNo": 1, "_type": "json",
+    })
+    try:
+        with urllib.request.urlopen(f"{BUS_ARRIVAL}?{query}", timeout=8,
+                                    context=outbound_tls()) as response:
+            body = json.loads(response.read().decode("utf-8"))["response"]["body"]
+    except Exception as error:                              # noqa: BLE001
+        log(f"  버스 도착정보 조회 실패: {error!r}")
+        return []
+    items = body.get("items") or {}
+    rows = items.get("item") if isinstance(items, dict) else None
+    if rows is None:
+        return []
+    return rows if isinstance(rows, list) else [rows]
+
+
+def arrival_rows_cached(city_code, node_id, at):
+    """`tago_arrival_rows` 를 30초 동안 재사용한다."""
+    key = (city_code, node_id)
+    cached = _arrival_rows.get(key)
+    if cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+        return cached[1]
+    rows = tago_arrival_rows(city_code, node_id)
+    _arrival_rows[key] = (at, rows)
+    return rows
+
+
+def arrival_stop(lat, lon):
+    """승차 좌표에 가장 가까운 정류장 → (도시코드, id). 못 찾으면 None.
+
+    **같은 이름이 여럿이다.** 풍산역이라는 이름의 정류장이 다섯 곳이고 방향별로
+    갈린다(2026-08-26 실측). 목록 순서를 믿지 않고 거리로 고른다 — 승차 좌표에서
+    `GGB219000638` 이 약 15m, 다음 후보가 약 32m 다. `bus_leg_waypoints` 가
+    좌표를 고르는 방식과 같은 규율이다.
+    """
+    key = (round(lat, 5), round(lon, 5))
+    if key in _arrival_stops:
+        return _arrival_stops[key]
+    best = None
+    for stop in nearby_stops(lat, lon, 20):
+        if not stop.get("id") or stop.get("city") is None:
+            continue
+        gap = haversine(lat, lon, float(stop["lat"]), float(stop["lon"]))
+        if best is None or gap < best[0]:
+            best = (gap, (stop["city"], stop["id"]))
+    found = best[1] if best else None
+    if found:
+        _arrival_stops[key] = found
+    return found
+
+
+def bus_arrival(lat, lon, route_no, now=None):
+    """그 자리에서 탈 `route_no` 버스가 언제 오는가. 모르면 None.
+
+    **절대시각을 돌려준다.** `몇 초 뒤` 가 아니다 — 화면이 그 글자를 그대로 들고
+    있으면 갱신이 끊긴 동안 거짓말이 되기 때문이다. 정류장에 서서 기다리는 동안은
+    위치 보고가 멈춘다(`distanceFilter` 가 150m 인데 풍산역에서 정류장까지가
+    78m 다). 그 몇 분이 하필 이 값이 가장 필요한 순간이다.
+
+    `expectedArrival` 이 이미 같은 규율로 쓰인다 — 절대시각을 주면 위젯이 스스로
+    센다.
+    """
+    # 인자 이름이 모듈의 `now()` 를 가린다. 인자 이름을 바꾸면 부르는 쪽이
+    # 헷갈리므로 여기서 `datetime` 을 직접 쓴다.
+    at = now or datetime.now(timezone.utc)
+    stop = arrival_stop(lat, lon)
+    if not stop:
+        return None
+    city_code, node_id = stop
+    want = str(route_no).strip()
+    best = None
+    for row in arrival_rows_cached(city_code, node_id, at):
+        if str(row.get("routeno") or "").strip() != want:
+            continue
+        try:
+            seconds = int(row.get("arrtime"))
+        except (TypeError, ValueError):
+            continue
+        # 이미 지난 차다. 음수를 그대로 더하면 과거 시각이 나가고 화면이 0 에서
+        # 멈춘 채로 남는다.
+        if seconds < 0:
+            continue
+        if best is None or seconds < best[0]:
+            best = (seconds, row)
+    if best is None:
+        return None
+    seconds, row = best
+    try:
+        stops_left = int(row.get("arrprevstationcnt"))
+    except (TypeError, ValueError):
+        stops_left = None
+    return {"no": want, "at": at + timedelta(seconds=seconds), "stops": stops_left}
+
+
 def n_eq(a, b):
     """정류장 이름 비교. 표기 차이를 흡수한다.
 
