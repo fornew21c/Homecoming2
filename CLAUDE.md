@@ -5,8 +5,11 @@
 
 ## 먼저 읽을 것
 
-- **[`docs/HANDOFF-2026-08-26.md`](docs/HANDOFF-2026-08-26.md)** — **여기서 시작한다.**
-  다음 작업 순서, 지하철 폴리라인, 8/25 실주행 사건을 끝까지 따라간 기록
+- **[`docs/HANDOFF-2026-08-26-bus.md`](docs/HANDOFF-2026-08-26-bus.md)** —
+  **여기서 시작한다.** 버스 실시간 도착을 붙인 기록. 다음 작업 순서와, 시험이
+  통과하는데 화면이 비던 두 사건
+- **[`docs/HANDOFF-2026-08-26.md`](docs/HANDOFF-2026-08-26.md)** — 그날 오전.
+  지하철 폴리라인, 8/25 실주행 사건을 끝까지 따라간 기록
 - **[`docs/HANDOFF-2026-08-21.md`](docs/HANDOFF-2026-08-21.md)** — 그 전날 한 일,
   공공데이터 일일 한도 1,000회 등
 - **[`docs/HANDOFF-2026-08-20.md`](docs/HANDOFF-2026-08-20.md)** — 배포 정보, 이 환경의
@@ -30,9 +33,18 @@
 **경로의 좌표열은 저장할 때 박힌다.** 그리기 로직을 고쳐도 이미 저장된 경로에는
 반영되지 않는다 — 앱에서 경로를 다시 저장해야 한다.
 
-**와이어 프로토콜은 추가만 한다.** `ContentState` 에 필드를 더하면
-`CodingKeys` · `init(from:)` · `encode(to:)` 세 곳을 같이 고쳐야 한다
-(`Shared/HomecomingAttributes.swift` 의 경고 주석 참고 — 빠뜨리면 값이 조용히 사라진다).
+**와이어 프로토콜은 추가만 한다.** `ContentState` 에 필드를 더하면 **네 곳**을
+같이 고쳐야 한다 — 빠뜨리면 값이 조용히 사라진다.
+
+1. `CodingKeys` · 2. `init(from:)` · 3. `encode(to:)`
+   (`Shared/HomecomingAttributes.swift` 의 경고 주석 참고)
+4. **`App/HomecomingActivityManager.swift` 의 `update(...)`** — 이 함수가
+   `ContentState` 를 **처음부터 다시 만든다.** 필드를 안 쓰는 것이 곧 지우는 것이라,
+   서버만 아는 값은 `previous` 에서 옮겨 담아야 "그대로 둔다" 가 된다.
+
+**네 번째를 빠뜨리면 시험은 다 통과하고 화면만 빈다.** 2026-08-26 에 실제로 그랬다 —
+서버가 `999번 15:59 도착` 을 보내는데 앱 화면에 아무것도 없었고, 로컬 갱신 한 번이
+지우고 있었다. 그 전에도 `travelledMeters`·`delaySeconds` 가 같은 함정에 빠졌다.
 
 ## 검증
 
@@ -48,9 +60,14 @@
 1,994m 벌어져 이탈로 오판됐다(2026-08-25). 역 좌표는 `Server/data/subway-lines.json`
 에 구워 두고 `GET /subway/leg` 가 준다 — `docs/HANDOFF-2026-08-26.md` 참고.
 
+**버스 실시간 도착은 시험으로 안 잡힌다.** 시험 환경에 `TAGO_KEY` 가 없어 조회가
+즉시 빠져나가므로, 값이 안 나오는 것도 `content_state` 가 9초 걸리는 것도 다
+통과한다. **화면을 봐야 한다** — `docs/HANDOFF-2026-08-26-bus.md` 의 검증 순서를
+따른다.
+
 ```bash
 python3 Tools/verify-progress-sync.py          # 카드 vs 지도, 실제 경로 28.4km
-cd Server && python3 -m unittest discover      # 서버 시험 61개
+cd Server && python3 -m unittest discover      # 서버 시험 98개
 ```
 
 ```bash
