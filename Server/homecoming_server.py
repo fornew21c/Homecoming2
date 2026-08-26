@@ -1042,6 +1042,35 @@ def seoul_search(text, limit=8):
             for n, la, lo, ars in found[:limit]]
 
 
+def tago_stop_body(lat, lon, limit):
+    """좌표 근접 정류소 조회의 응답 본문. 실패하면 None.
+
+    **한 번 실패로 포기하지 않는다.** 이 API 는 정상 요청에도 오류 봉투를
+    섞어 보낸다(`KeyError('response')` 로 드러난다). 한 번 실패하면 정류장이
+    통째로 안 보이고, 사용자에게는 "그 자리에 정류장이 없다" 로 읽힌다.
+
+    **HTTP 를 따로 뗀 이유는 시험이다.** 시험이 이 함수만 갈아 끼우면 나머지
+    고르기 로직을 망 없이 잴 수 있다.
+    """
+    query = urllib.parse.urlencode({
+        "serviceKey": TAGO_KEY, "gpsLati": lat, "gpsLong": lon,
+        # 20 미만을 넣으면 간헐적으로 오류 봉투가 온다(실측). 반경이 고정이라
+        # 크게 넣어도 결과가 늘지 않으니(17개가 상한이었다) 손해가 없다.
+        "numOfRows": max(20, limit), "pageNo": 1, "_type": "json",
+    })
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(f"{TAGO_STOPS}?{query}", timeout=8,
+                                        context=outbound_tls()) as response:
+                return json.loads(response.read().decode("utf-8"))["response"]["body"]
+        except Exception as error:                          # noqa: BLE001
+            if attempt == 2:
+                log(f"  정류소 조회 실패({attempt + 1}회): {error!r}")
+                return None
+            time.sleep(0.5)
+    return None
+
+
 def nearby_stops(lat, lon, limit=8):
     """이 좌표 근처의 버스정류장. 이름과 좌표를 그대로 준다.
 
@@ -1053,27 +1082,7 @@ def nearby_stops(lat, lon, limit=8):
     """
     if not TAGO_KEY:
         return []
-    query = urllib.parse.urlencode({
-        "serviceKey": TAGO_KEY, "gpsLati": lat, "gpsLong": lon,
-        # 20 미만을 넣으면 간헐적으로 오류 봉투가 온다(실측). 반경이 고정이라
-        # 크게 넣어도 결과가 늘지 않으니(17개가 상한이었다) 손해가 없다.
-        "numOfRows": max(20, limit), "pageNo": 1, "_type": "json",
-    })
-    # **한 번 실패로 포기하지 않는다.** 이 API 는 정상 요청에도 오류 봉투를
-    # 섞어 보낸다(`KeyError('response')` 로 드러난다). 한 번 실패하면 정류장이
-    # 통째로 안 보이고, 사용자에게는 "그 자리에 정류장이 없다" 로 읽힌다.
-    body = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(f"{TAGO_STOPS}?{query}", timeout=8,
-                                        context=outbound_tls()) as response:
-                body = json.loads(response.read().decode("utf-8"))["response"]["body"]
-            break
-        except Exception as error:                          # noqa: BLE001
-            if attempt == 2:
-                log(f"  정류소 조회 실패({attempt + 1}회): {error!r}")
-                return []
-            time.sleep(0.5)
+    body = tago_stop_body(lat, lon, limit)
     if body is None:
         return []
 
@@ -1085,6 +1094,9 @@ def nearby_stops(lat, lon, limit=8):
     return [
         {"name": r["nodenm"], "lat": r["gpslati"], "lon": r["gpslong"],
          "no": r.get("nodeno"),
+         # **정류장 id.** 도착정보 API(`ArvlInfoInqireService`)가 `nodeId` 로 받는다.
+         # 응답에 늘 있었는데 버리고 있었다.
+         "id": r.get("nodeid"),
          # 도시코드. 이름으로 정류장을 다시 찾을 때 필요하다 — 좌표만으로 찾는
          # 근접 조회는 반경이 좁아서(실측 17개) 500m 옆 정류장이 안 잡힌다.
          "city": r.get("citycode")}
