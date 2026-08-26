@@ -25,6 +25,10 @@ struct HomecomingJourneyCard: View {
     /// `state.measuredAt` 이 없을 때만 쓰는 대체값이다 — 나이의 주인은 픽스 시각이다.
     let lastFixedAt: Date?
 
+    /// 버스 도착 새로고침. **귀가자 카드만 넘긴다** — 가족은 남의 세션을 새로
+    /// 조회할 수 없고, 눌러도 아무 일 없는 버튼은 없는 것보다 나쁘다.
+    var onRefreshBusArrival: (() async -> Void)? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
@@ -83,7 +87,8 @@ struct HomecomingJourneyCard: View {
             // 순간 다른 그림으로 뒤바뀐다. 노선도는 "다 지났다"는 상태(마지막
             // 정류장까지 채워진 점)를 이미 표현할 수 있으므로 바꿀 이유가 없다.
             if let shape = attributes.routeShape {
-                RouteStripView(shape: shape, state: state, lastFixedAt: lastFixedAt)
+                RouteStripView(shape: shape, state: state, lastFixedAt: lastFixedAt,
+                               onRefreshBusArrival: onRefreshBusArrival)
             } else {
                 HomecomingProgressBar(state: state, height: 8)
             }
@@ -143,6 +148,9 @@ struct HomecomingJourneySection: View {
     let state: HomecomingAttributes.ContentState
     let lastFixedAt: Date?
 
+    /// 버스 도착 새로고침. 귀가자 화면에서만 넘어온다.
+    var onRefreshBusArrival: (() async -> Void)? = nil
+
     /// 어느 귀가인가. 지도가 경로 좌표를 받아 올 열쇠다.
     ///
     /// 가족 쪽은 액티비티 고정값에서 온다(서버가 넣어 준다). 귀가자 쪽은
@@ -175,7 +183,8 @@ struct HomecomingJourneySection: View {
                 routes: routes)
 
             HomecomingJourneyCard(
-                attributes: attributes, state: state, lastFixedAt: lastFixedAt)
+                attributes: attributes, state: state, lastFixedAt: lastFixedAt,
+                onRefreshBusArrival: onRefreshBusArrival)
         }
     }
 }

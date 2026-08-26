@@ -244,7 +244,24 @@ final class HomecomingActivityManager {
             // 위치 갱신이 덮어쓰면 방금 누른 확인이 사라진다.
             checkInDeadline: previous.checkInDeadline,
             endReason: previous.endReason,
-            anomaly: anomaly
+            anomaly: anomaly,
+            // **다음 버스 도착도 서버만 아는 값이다.** 앱은 어느 정류장인지도,
+            // 그 버스가 어디 있는지도 모른다.
+            //
+            // 안 옮기면 로컬 갱신 한 번에 지워진다. 2026-08-26 시뮬레이터 검증에서
+            // 정확히 그랬다 — 서버가 `999 · 15:59 도착 · 2정류장 전` 을 보냈는데
+            // 화면에는 아무것도 없었다. 위의 `travelledMeters`·`delaySeconds` 가
+            // 같은 함정에 빠졌던 자리이고, 이 함수는 `ContentState` 를 처음부터
+            // 다시 만들기 때문에 **필드를 안 쓰는 것이 곧 지우는 것**이다.
+            //
+            // 와이어에 필드를 더할 때 고쳐야 하는 자리가 셋이 아니라 넷이다
+            // (`CodingKeys` · `init(from:)` · `encode(to:)` · 여기).
+            busArrivalNo: previous.busArrivalNo,
+            busArrivalAt: previous.busArrivalAt,
+            busArrivalStops: previous.busArrivalStops,
+            busArrivalMeasuredAt: previous.busArrivalMeasuredAt,
+            busArrivalThenAt: previous.busArrivalThenAt,
+            busArrivalThenStops: previous.busArrivalThenStops
         )
 
         let alert = Self.alert(for: state, previous: previous, name: activity.attributes.travelerName)

@@ -199,7 +199,28 @@ struct HomecomingAttributes: ActivityAttributes {
         var busArrivalAt: Date?
 
         /// 그 버스가 몇 정류장 앞에 있는지. 모르면 nil.
+        ///
+        /// **이 값은 늙지 않는다.** `busArrivalAt` 은 절대시각이라 시계가 흐르면
+        /// 스스로 맞아 가는데, `5정류장 전` 은 그대로 남아 거짓이 된다. 그래서
+        /// `busArrivalMeasuredAt` 과 함께 봐야 하고, 낡으면 이 숫자만 감춘다.
         var busArrivalStops: Int?
+
+        /// 도착정보를 **언제 쟀는지**. 정류장 수의 나이를 재는 데 쓴다.
+        ///
+        /// 2026-08-26 실측: 같은 버스가 15:36 에 5정류장, 15:37:55 에 3정류장 —
+        /// 115초에 두 정류장, 약 57초에 하나다. 그래서 문턱을 60초로 둔다
+        /// (`busArrivalStopsFresh`). 그만큼 지나면 숫자가 이미 하나 틀렸다고 본다.
+        var busArrivalMeasuredAt: Date?
+
+        /// **그다음 차**가 닿을 절대시각. 없으면 한 대뿐이거나 막차다.
+        ///
+        /// 앞차를 놓쳤을 때 얼마를 더 기다리는지가 뛸지 말지를 가른다 — 4분 뒤에
+        /// 또 온다면 안 뛰어도 되고, 20분이면 뛰어야 한다. 실측에서 999번이
+        /// 293초·1158초 두 대로 왔다(2026-08-26).
+        var busArrivalThenAt: Date?
+
+        /// 그다음 차가 몇 정류장 앞인지. `busArrivalStops` 와 같은 이유로 늙는다.
+        var busArrivalThenStops: Int?
     }
 }
 
@@ -514,6 +535,9 @@ extension HomecomingAttributes.ContentState {
         case busArrivalNo
         case busArrivalAt
         case busArrivalStops
+        case busArrivalMeasuredAt
+        case busArrivalThenAt
+        case busArrivalThenStops
     }
 
     init(from decoder: Decoder) throws {
@@ -539,6 +563,9 @@ extension HomecomingAttributes.ContentState {
         busArrivalNo = try container.decodeIfPresent(String.self, forKey: .busArrivalNo)
         busArrivalAt = try container.decodeWireDateIfPresent(forKey: .busArrivalAt)
         busArrivalStops = try container.decodeIfPresent(Int.self, forKey: .busArrivalStops)
+        busArrivalMeasuredAt = try container.decodeWireDateIfPresent(forKey: .busArrivalMeasuredAt)
+        busArrivalThenAt = try container.decodeWireDateIfPresent(forKey: .busArrivalThenAt)
+        busArrivalThenStops = try container.decodeIfPresent(Int.self, forKey: .busArrivalThenStops)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -564,6 +591,9 @@ extension HomecomingAttributes.ContentState {
         try container.encodeIfPresent(busArrivalNo, forKey: .busArrivalNo)
         try container.encodeWireIfPresent(busArrivalAt, forKey: .busArrivalAt)
         try container.encodeIfPresent(busArrivalStops, forKey: .busArrivalStops)
+        try container.encodeWireIfPresent(busArrivalMeasuredAt, forKey: .busArrivalMeasuredAt)
+        try container.encodeWireIfPresent(busArrivalThenAt, forKey: .busArrivalThenAt)
+        try container.encodeIfPresent(busArrivalThenStops, forKey: .busArrivalThenStops)
     }
 }
 
@@ -653,12 +683,50 @@ extension HomecomingAttributes.ContentState {
     ///
     /// 값이 없으면 nil 이고 두 화면 다 줄을 안 그린다.
     var busArrivalLine: String? {
-        guard let at = busArrivalAt, let no = busArrivalNo else { return nil }
-        var line = "\(no)번 \(Self.clockFormatter.string(from: at)) 도착"
-        if let stops = busArrivalStops, stops > 0 {
-            line += " · \(stops)정류장 전"
-        }
+        guard let clock = busArrivalClockText, let no = busArrivalNo else { return nil }
+        var line = "\(no)번 \(clock) 도착"
+        if let stops = busArrivalStopsText { line += " · \(stops)" }
+        if let then = busArrivalThenClockText { line += " · 다음 \(then)" }
         return line
+    }
+
+    /// 버스가 닿을 시각만. "15:44"
+    var busArrivalClockText: String? {
+        busArrivalAt.map { Self.clockFormatter.string(from: $0) }
+    }
+
+    /// 정류장 수가 아직 참인가. **잰 지 60초 안쪽일 때만 참으로 본다.**
+    ///
+    /// 근거는 `busArrivalMeasuredAt` 주석에 있다 — 실측에서 약 57초에 한 정류장씩
+    /// 줄었다. 잰 시각을 모르는 서버가 보낸 갱신이면(옛 서버) 판단할 수 없으니
+    /// 그리지 않는다. 모르는 것을 그럴듯하게 그리지 않는다.
+    var busArrivalStopsFresh: Bool {
+        guard let measured = busArrivalMeasuredAt else { return false }
+        return Date().timeIntervalSince(measured) < 60
+    }
+
+    /// "2정류장 전". 낡았거나 모르면 nil.
+    var busArrivalStopsText: String? {
+        guard busArrivalStopsFresh, let stops = busArrivalStops, stops > 0 else { return nil }
+        return "\(stops)정류장 전"
+    }
+
+    /// 그다음 차의 시각만. "16:14"
+    var busArrivalThenClockText: String? {
+        busArrivalThenAt.map { Self.clockFormatter.string(from: $0) }
+    }
+
+    /// 그다음 차의 "11정류장 전". 낡았거나 모르면 nil.
+    var busArrivalThenStopsText: String? {
+        guard busArrivalStopsFresh, let stops = busArrivalThenStops, stops > 0 else { return nil }
+        return "\(stops)정류장 전"
+    }
+
+    /// "16:14 · 11정류장 전". 한 줄로 쓰는 자리(잠금화면)용. 없으면 nil.
+    var busArrivalThenText: String? {
+        guard let clock = busArrivalThenClockText else { return nil }
+        guard let stops = busArrivalThenStopsText else { return clock }
+        return "\(clock) · \(stops)"
     }
 
     /// 도착예정이 이미 지났다. **그리는 그 순간의 판정이다.**

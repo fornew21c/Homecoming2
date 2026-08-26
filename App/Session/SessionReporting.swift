@@ -25,6 +25,14 @@ protocol SessionReporting: Sendable {
 
     /// 도착했거나 사용자가 껐다.
     func end(sessionID: String, reason: SessionEndReason) async throws
+
+    /// 다음에 탈 버스의 도착을 **지금 당장** 다시 조회한다. 카드의 새로고침을 눌렀다.
+    ///
+    /// **위치 보고보다 오래 기다린다.** 위치 보고는 늦으면 의미가 없어서 8초에
+    /// 끊지만, 이건 사람이 손가락으로 누르고 화면을 보고 있는 요청이다. 서버도
+    /// 이 자리에서만 공공데이터를 동기로 부른다(실측 1.4초).
+    func refreshBusArrival(sessionID: String) async throws
+        -> HomecomingAttributes.ContentState?
 }
 
 // MARK: - 요청 형태
@@ -137,11 +145,23 @@ struct RemoteSessionReporter: SessionReporting {
         _ = try await post("session/\(sessionID)/end", body: Body(reason: reason))
     }
 
-    private func post<T: Encodable>(_ path: String, body: T) async throws -> Data {
+    func refreshBusArrival(sessionID: String) async throws
+        -> HomecomingAttributes.ContentState? {
+        struct Empty: Encodable {}
+        // 8초로는 짧다. 서버가 정류장 조회와 도착 조회를 잇달아 하고, 사내망이
+        // 아닌 곳에서도 1.4초가 걸렸다(2026-08-26 실측). 여유를 둔다.
+        let data = try await post("session/\(sessionID)/bus-arrival",
+                                  body: Empty(), timeout: 20)
+        struct Response: Decodable { let state: HomecomingAttributes.ContentState? }
+        return try? JSONDecoder().decode(Response.self, from: data).state
+    }
+
+    private func post<T: Encodable>(_ path: String, body: T,
+                                    timeout: TimeInterval? = nil) async throws -> Data {
         let (data, http) = try await auth.send(baseURL: baseURL, session: session) {
             var request = URLRequest(url: baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
-            request.timeoutInterval = timeout
+            request.timeoutInterval = timeout ?? self.timeout
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
             return request
@@ -170,6 +190,10 @@ struct LocalOnlySessionReporter: SessionReporting {
     func report(sessionID: String, location: SessionLocation) async throws
         -> HomecomingAttributes.ContentState? { nil }
     func end(sessionID: String, reason: SessionEndReason) async throws {}
+
+    /// 서버가 없으면 새로 물을 곳도 없다.
+    func refreshBusArrival(sessionID: String) async throws
+        -> HomecomingAttributes.ContentState? { nil }
 }
 
 enum SessionError: LocalizedError {

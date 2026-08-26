@@ -81,6 +81,14 @@ struct RouteStripView: View {
     /// 이다 — 이유는 `hereNote` 주석에 있다. nil 이면 "언제 것인지" 를 적지 않는다.
     var lastFixedAt: Date? = nil
 
+    /// 버스 도착을 다시 물어 오는 일. **nil 이면 새로고침 버튼을 그리지 않는다.**
+    ///
+    /// 귀가자 카드만 넘긴다. 가족은 남의 세션을 새로 조회할 수 없고, 버튼을 그려
+    /// 놓고 아무 일도 안 나는 것이 없는 것보다 나쁘다.
+    var onRefreshBusArrival: (() async -> Void)? = nil
+
+    @State private var refreshing = false
+
     /// 노선도 위의 지금 자리.
     ///
     /// **지나온 거리는 서버가 준다.** `state.travelledMeters` 다. 지도의 지나온/남은
@@ -220,7 +228,10 @@ struct RouteStripView: View {
         // 버스 도착이 붙는 이음은 줄이 하나 더 들어간다. 그 줄은 승차 15분 전부터만
         // 있으므로 평소 높이는 그대로다.
         let hasArrival = index == busArrivalIndex && busArrivalNote != nil
-        let height: CGFloat = (here ? 30 : 16) + (hasArrival ? 13 : 0)
+        // 칩 한 줄이 30, 그다음 차까지 두 줄이면 44.
+        let arrivalHeight: CGFloat = hasArrival
+            ? (state.busArrivalThenText != nil ? 44 : 30) : 0
+        let height: CGFloat = (here ? 30 : 16) + arrivalHeight
 
         HStack(alignment: .center, spacing: 10) {
             ZStack(alignment: .top) {
@@ -251,12 +262,8 @@ struct RouteStripView: View {
                         .foregroundStyle(.white.opacity(0.45))
                         .lineLimit(1)
                 }
-                if hasArrival, let note = busArrivalNote {
-                    Text(note)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                if hasArrival {
+                    busArrivalChip
                 }
             }
             Spacer(minLength: 0)
@@ -279,6 +286,102 @@ struct RouteStripView: View {
     /// 그 이음에 적을 도착 한 줄. **문구는 `ContentState` 가 만든다** —
     /// 잠금화면이 같은 값을 쓰므로 두 화면이 갈라질 수 없다.
     private var busArrivalNote: String? { state.busArrivalLine }
+
+    /// 다음에 탈 버스가 언제 오는가. **이 카드에서 가장 눈에 띄어야 하는 줄이다.**
+    ///
+    /// 처음에는 구간 이름과 같은 10pt 흐린 글씨로 그렸는데, 정류장에서 폰을 꺼내
+    /// 이걸 보려는 사람에게는 안 보였다(2026-08-26 화면 확인). 뛸지 말지를 그
+    /// 자리에서 정하는 값이라 노선도의 다른 글씨보다 커야 한다.
+    ///
+    /// **시각이 주인공이다.** 노선번호는 어느 버스인지 가리는 배지이고, 정류장 수는
+    /// 곁들이다 — 그래서 크기와 굵기가 그 순서다.
+    @ViewBuilder
+    private var busArrivalChip: some View {
+        // **칸을 맞춘다.** 두 줄이 나란히 있을 때 시각끼리·정류장 수끼리 세로로
+        // 서지 않으면 "몇 분 더 기다리나" 를 견주기가 어렵다 — 그게 이 두 줄이
+        // 있는 이유다. `Grid` 가 열 너비를 맞춰 준다.
+        Grid(alignment: .leading, horizontalSpacing: 5, verticalSpacing: 3) {
+            GridRow {
+                // **아이콘을 별도 칸으로 뺀다.** 첫 칸에 아이콘과 노선번호를
+                // 같이 넣으면 둘째 줄의 `그다음` 이 아이콘 자리부터 시작해
+                // 노선번호와 어긋난다.
+                Image(systemName: "bus.fill")
+                    .font(.system(size: 10, weight: .bold))
+                Text(state.busArrivalNo.map { "\($0)번" } ?? "")
+                    .font(.system(size: 11, weight: .heavy))
+                Text(state.busArrivalClockText ?? "")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    // 두 줄의 시각이 폭이 달라도 자리가 맞으려면 오른쪽 정렬이어야 한다.
+                    .gridColumnAlignment(.trailing)
+                Text("도착")
+                    .font(.system(size: 10, weight: .semibold))
+                    .opacity(0.75)
+                Text(state.busArrivalStopsText.map { "· \($0)" } ?? "")
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+                    .opacity(0.75)
+                refreshButton
+            }
+            // **그다음 차.** 앞차를 놓쳤을 때 얼마를 더 기다리는지가 뛸지 말지를
+            // 가른다 — 4분 뒤에 또 오면 안 뛰어도 되고, 20분이면 뛰어야 한다.
+            //
+            // **크기는 첫 줄과 같게 두고 위계는 흐림으로만 준다.** 글자를 줄이면
+            // 칸 폭이 달라져 두 줄이 어긋난다(2026-08-26 화면 확인).
+            if let clock = state.busArrivalThenClockText {
+                GridRow {
+                    // 아이콘 칸은 비운다 — 같은 노선이라 다시 그릴 것이 없다.
+                    Text("")
+                    Text("그다음")
+                        .font(.system(size: 11, weight: .semibold))
+                        .opacity(0.55)
+                    Text(clock)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .opacity(0.7)
+                    Text("도착")
+                        .font(.system(size: 10, weight: .semibold))
+                        .opacity(0.5)
+                    Text(state.busArrivalThenStopsText.map { "· \($0)" } ?? "")
+                        .font(.system(size: 10, weight: .medium))
+                        .monospacedDigit()
+                        .opacity(0.5)
+                }
+            }
+        }
+        .foregroundStyle(state.tint)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 12).fill(state.tint.opacity(0.18)))
+        .overlay(RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(state.tint.opacity(0.35), lineWidth: 0.5))
+    }
+
+    /// 눌러서 지금 다시 묻는다. 넘겨받은 일이 없으면(가족 화면) 안 그린다.
+    @ViewBuilder
+    private var refreshButton: some View {
+        if let onRefreshBusArrival {
+            Button {
+                guard !refreshing else { return }
+                refreshing = true
+                Task {
+                    await onRefreshBusArrival()
+                    refreshing = false
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 10, weight: .bold))
+                    .rotationEffect(.degrees(refreshing ? 360 : 0))
+                    .animation(refreshing
+                               ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                               : .default, value: refreshing)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 1)
+        }
+    }
 
     /// 그 정류장으로 가는 수단과 시간. "버스 9분"
     ///

@@ -447,6 +447,21 @@ final class HomecomingCoordinator {
         return false
     }
 
+    /// 카드의 새로고침을 눌렀다. 버스 도착만 다시 물어 화면에 앉힌다.
+    ///
+    /// **위치를 보내지 않는다.** 새로 알고 싶은 것은 버스이지 내 자리가 아니고,
+    /// 여기서 보고를 만들면 접근 속도 계산에 제자리 픽스가 한 건 섞인다.
+    func refreshBusArrival() async {
+        guard let sessionID else { return }
+        do {
+            if let state = try await sessions.refreshBusArrival(sessionID: sessionID) {
+                await activity.adopt(state)
+            }
+        } catch {
+            HomecomingLog.push.error("버스 도착 새로고침 실패: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func closeSession(_ reason: SessionEndReason) {
         guard let sessionID else { return }
         self.sessionID = nil

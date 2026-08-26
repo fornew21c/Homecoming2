@@ -243,6 +243,9 @@ struct ContentView: View {
                 attributes: attributes,
                 state: state,
                 lastFixedAt: coordinator.lastReportedAt,
+                // **귀가자만 넘긴다.** 가족 카드(`watchingSection`)는 이 값을
+                // 안 넘기므로 버튼이 안 그려진다.
+                onRefreshBusArrival: { await coordinator.refreshBusArrival() },
                 // 액티비티 고정값이 아니라 코디네이터의 값을 쓴다. 첫 출발에서는
                 // 액티비티가 세션보다 먼저 떠서 고정값이 비어 있다.
                 sessionID: coordinator.sessionID,

@@ -1106,7 +1106,16 @@ def bus_arrival(lat, lon, route_no, now=None):
         return None
     city_code, node_id = stop
     want = str(route_no).strip()
-    best = None
+
+    def stops_of(row):
+        try:
+            return int(row.get("arrprevstationcnt"))
+        except (TypeError, ValueError):
+            return None
+
+    # **오는 차를 다 모아 빠른 순으로 세운다.** 같은 노선이 여러 줄로 온다 —
+    # 실측에서 999번이 293초·1158초 두 대였다(2026-08-26).
+    coming = []
     for row in arrival_rows_cached(city_code, node_id, at):
         if str(row.get("routeno") or "").strip() != want:
             continue
@@ -1118,16 +1127,23 @@ def bus_arrival(lat, lon, route_no, now=None):
         # 멈춘 채로 남는다.
         if seconds < 0:
             continue
-        if best is None or seconds < best[0]:
-            best = (seconds, row)
-    if best is None:
+        coming.append((seconds, row))
+    if not coming:
         return None
-    seconds, row = best
-    try:
-        stops_left = int(row.get("arrprevstationcnt"))
-    except (TypeError, ValueError):
-        stops_left = None
-    return {"no": want, "at": at + timedelta(seconds=seconds), "stops": stops_left}
+    coming.sort(key=lambda pair: pair[0])
+
+    seconds, row = coming[0]
+    value = {"no": want, "at": at + timedelta(seconds=seconds),
+             "stops": stops_of(row),
+             # 화면이 정류장 수의 나이를 재는 데 쓴다.
+             "measuredAt": at}
+    # **그다음 차.** 앞차를 놓쳤을 때 얼마를 더 기다리는지가 뛸지 말지를 가른다 —
+    # 4분 뒤에 또 온다면 안 뛰어도 되고, 20분이면 뛰어야 한다.
+    if len(coming) > 1:
+        then_seconds, then_row = coming[1]
+        value["thenAt"] = at + timedelta(seconds=then_seconds)
+        value["thenStops"] = stops_of(then_row)
+    return value
 
 
 def n_eq(a, b):
@@ -1531,12 +1547,25 @@ def content_state(session):
     # 조회가 실측 9~13초인데 앱의 위치 보고 타임아웃이 8초다(2026-08-26).
     route = route_of(session)
     if route:
-        arrival = arrival_ready(route["legs"], session["route_progress"] or 0)
+        arrival = arrival_ready(route["legs"], session["route_progress"] or 0,
+                                lat=session["last_lat"], lon=session["last_lon"])
         if arrival:
             state["busArrivalNo"] = arrival["no"]
             state["busArrivalAt"] = iso(arrival["at"])
             if arrival["stops"] is not None:
                 state["busArrivalStops"] = arrival["stops"]
+            # **정류장 수는 늙지 않는다.** 시각은 절대시각이라 시계가 흐르면
+            # 스스로 맞아 가는데, `5정류장 전` 은 그대로 남아 거짓이 된다.
+            #
+            # 2026-08-26 실측: 15:36 에 5, 15:37:55 에 3 — 약 60초에 한 정류장이다.
+            # 그래서 화면이 나이를 알아야 하고, 낡으면 그 숫자만 감춘다.
+            if arrival.get("measuredAt"):
+                state["busArrivalMeasuredAt"] = iso(arrival["measuredAt"])
+            # 그다음 차. 없으면 안 싣는다 — 막차거나 배차가 뜸한 시간이다.
+            if arrival.get("thenAt"):
+                state["busArrivalThenAt"] = iso(arrival["thenAt"])
+                if arrival.get("thenStops") is not None:
+                    state["busArrivalThenStops"] = arrival["thenStops"]
     return state
 
 
@@ -2064,15 +2093,45 @@ def leg_at(legs, elapsed):
 ARRIVAL_LEAD_SECONDS = 15 * 60
 
 
-def next_bus_leg(legs, progress):
-    """지금 자리 **뒤**의 첫 버스 구간. 없으면 None.
+# 승차 지점에서 이만큼 안에 있으면 **아직 기다리는 중**으로 본다.
+#
+# **왜 필요한가** — 진행도는 저장된 시간표에서 나온다. 정류장에 서서 버스를
+# 기다리는 동안에도 승차 시각을 지나면 진행도가 버스 구간으로 넘어가고, 그러면
+# "이미 탔다" 로 판정돼 도착정보가 사라진다. 하필 그때가 이 값이 가장 필요한
+# 순간이다 — 2026-08-26 시뮬레이터 검증에서 정확히 그렇게 사라졌다.
+#
+# 150m 인 근거: 풍산역 이름의 정류장 네 기둥이 130m 안에 흩어져 있고(실측),
+# 버스 픽스의 정확도를 이 저장소가 30m 로 잡는다. 서서 기다리는 사람은 그 안이다.
+# 버스가 출발하면 몇 초 안에 이 반경을 벗어난다.
+ARRIVAL_WAITING_METERS = 150
+
+
+def next_bus_leg(legs, progress, lat=None, lon=None):
+    """다음에 **탈** 버스 구간. 없으면 None.
 
     **타고 있는 버스는 다음이 아니다.** 이미 탄 버스가 언제 오는지는 알 필요가
-    없다. 그래서 지금 구간을 포함하지 않고 그 뒤부터 본다.
+    없다. 그래서 원칙은 지금 구간을 빼고 그 뒤부터 보는 것이다.
+
+    **다만 시간표가 넘어갔다고 탄 것은 아니다.** 진행도는 저장된 소요시간에서
+    나오므로, 버스가 늦으면 정류장에 서 있는데도 승차 시각을 지난다. 그래서
+    좌표가 있으면 승차 지점과의 거리를 본다 — `ARRIVAL_WAITING_METERS` 안에
+    아직 있으면 기다리는 중이고, 그 버스가 여전히 "다음" 이다.
+
+    좌표가 없으면(첫 보고 전) 예전처럼 시간만으로 판단한다.
     """
     if not legs:
         return None
     here = leg_index_at(legs, progress)
+
+    # 지금 구간이 버스이고, 아직 그 승차 지점 근처에 서 있으면 그게 다음 버스다.
+    current = legs[here]
+    if (current.get("mode") == "bus" and current.get("busNo")
+            and lat is not None and lon is not None):
+        points = current.get("points") or []
+        if points and haversine(lat, lon, points[0][0],
+                                points[0][1]) <= ARRIVAL_WAITING_METERS:
+            return current
+
     for leg in legs[here + 1:]:
         if leg.get("mode") == "bus" and leg.get("busNo"):
             return leg
@@ -2112,7 +2171,7 @@ def start_arrival_refresh(route_no, lat, lon):
     threading.Thread(target=fill, daemon=True).start()
 
 
-def arrival_ready(legs, progress, now=None):
+def arrival_ready(legs, progress, now=None, lat=None, lon=None):
     """다음 버스의 도착값 — **캐시에 있는 것만.** 없으면 None 이고 배경에서 채운다.
 
     **여기서 기다리면 안 된다.** 앱의 위치 보고 타임아웃이 8초인데 도착 조회가
@@ -2122,9 +2181,11 @@ def arrival_ready(legs, progress, now=None):
     첫 보고에는 값이 없고 그다음부터 있다. 모르는 것을 기다리게 하느니 안 그린다.
     """
     at = now or datetime.now(timezone.utc)
-    leg = next_bus_leg(legs, progress)
+    leg = next_bus_leg(legs, progress, lat, lon)
     if not leg:
         return None
+    # 창은 **아직 안 탔을 때만** 잰다. 이미 승차 시각을 지나 기다리는 중이면
+    # `left` 가 음수이고, 그건 창 안이다.
     if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
         return None
     points = leg.get("points") or []
@@ -2535,6 +2596,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_session_start(body, me)
         if path.startswith("/session/") and path.endswith("/location"):
             return self.handle_location(path.split("/")[2], body, me)
+        if path.startswith("/session/") and path.endswith("/bus-arrival"):
+            return self.handle_bus_arrival(path.split("/")[2], me)
         if path.startswith("/session/") and path.endswith("/end"):
             return self.handle_session_end(path.split("/")[2], body, me)
 
@@ -3168,6 +3231,36 @@ class Handler(BaseHTTPRequestHandler):
             log(f"세션 {session_id} 시작 — {session['traveler_name']} · 경로 없음(거리 추정) · {where}")
         threading.Thread(target=start_activities, args=(session,), daemon=True).start()
         return self.reply(200, {"sessionId": session_id})
+
+    def handle_bus_arrival(self, session_id, me):
+        """버스 도착을 **지금 당장** 새로 조회한다. 사람이 카드의 새로고침을 눌렀다.
+
+        **이 자리에서는 기다려도 된다.** `content_state` 가 절대 안 기다리는 것과
+        일부러 다르다 — 그쪽은 위치 보고 응답에 얹혀서 앱의 8초 예산 안에 들어가야
+        하지만, 이쪽은 사람이 손가락으로 누르고 화면을 보고 있는 요청이다.
+        4초를 기다리는 것이 낡은 `5정류장 전` 을 보는 것보다 낫다.
+
+        조회가 실패하거나 그 노선이 안 오면 값 없이 상태만 돌려준다. 빈 결과는
+        실패가 아니다 — 이 파일의 다른 공공데이터 자리와 같은 계약이다.
+        """
+        session = self.owned_session(session_id, me)
+        if not session:
+            return self.reply(404, {"error": "unknown session"})
+
+        route = route_of(session)
+        leg = next_bus_leg(route["legs"], session["route_progress"] or 0,
+                           session["last_lat"], session["last_lon"]) if route else None
+        points = (leg or {}).get("points") or []
+        if leg and points:
+            lat, lon = points[0][0], points[0][1]
+            # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
+            _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
+            value = bus_arrival(lat, lon, leg["busNo"])
+            _arrival_ready[(str(leg["busNo"]), lat, lon)] = (now(), value)
+            log(f"  버스 {leg['busNo']} 도착 새로고침 → "
+                f"{iso(value['at']) if value else '없음'}")
+
+        return self.reply(200, {"ok": True, "state": content_state(session)})
 
     def handle_location(self, session_id, body, me):
         session = self.owned_session(session_id, me)

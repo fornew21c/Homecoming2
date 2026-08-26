@@ -42,12 +42,27 @@ class NearbyStopsTests(unittest.TestCase):
 
 
 def arrival_row(route_no, seconds, stops_left):
-    """`getSttnAcctoArvlPrearngeInfoList` 응답 한 줄."""
-    return {"routeno": route_no, "arrtime": seconds,
-            "arrprevstationcnt": stops_left, "routetp": "일반버스"}
+    """`getSttnAcctoArvlPrearngeInfoList` 응답 한 줄.
+
+    **`routeno` 는 숫자로 온다.** 실제 응답에 따옴표가 없다(2026-08-26 포스트맨
+    확인: `"routeno": 999`). 표본을 문자열로 적어 두면 숫자로 오는 길을 시험이
+    한 번도 밟지 않는다 — 코드가 `str()` 로 감싸는 이유가 여기 있는데 그게
+    정말 필요한지 시험이 말해 주지 못한다.
+
+    `nodeid`·`routeid`·`vehicletp` 도 실제 응답에 함께 온다. 쓰지 않지만 표본이
+    응답과 같은 모양이어야 나중에 필드를 쓸 때 헛수고를 안 한다.
+    """
+    return {"arrprevstationcnt": stops_left, "arrtime": seconds,
+            "nodeid": "GGB219000638", "nodenm": "풍산역",
+            "routeid": "GGB218000111",
+            "routeno": int(route_no) if str(route_no).isdigit() else route_no,
+            "routetp": "일반버스", "vehicletp": "일반차량"}
 
 
 # 2026-08-26 실측. 풍산역(GGB219000638, 고양 31100)에 오는 버스들.
+#
+# 같은 노선이 여러 줄로 온다 — 같은 `routeid` 의 다른 차량이다. 16:07 응답에서
+# 81번이 221초·939초, 96번이 1098초·3055초 두 대씩이었다.
 PUNGSAN_ROWS = [
     arrival_row("999", 582, 6),
     arrival_row("81", 1217, 14),
@@ -451,6 +466,83 @@ class RefreshThreadTests(unittest.TestCase):
         self.assertNotIn(key, hs._arrival_refreshing)
         # 터졌으니 값은 안 써진다 — 낡은 값이 있었다면 그대로 남는다.
         self.assertNotIn(key, hs._arrival_ready)
+
+
+class SecondBusTests(unittest.TestCase):
+    """같은 노선이 여러 대면 **그다음 차까지** 준다.
+
+    앞차를 놓쳤을 때 얼마를 더 기다리는지가 뛸지 말지를 가른다. 실측에서 999번이
+    293초·1158초 두 대로 왔다(2026-08-26).
+    """
+
+    def setUp(self):
+        hs._arrival_stops.clear()
+        hs._arrival_rows.clear()
+
+    def near(self):
+        return mock.patch.object(
+            hs, "nearby_stops",
+            lambda lat, lon, limit=8: [{"id": "GGB219000638", "name": "풍산역",
+                                        "lat": 37.67315, "lon": 126.7872167,
+                                        "city": 31100}])
+
+    def test_두_대면_둘_다_준다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows",
+                lambda city, node: [arrival_row("999", 1158, 11),
+                                    arrival_row("999", 293, 2)]):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        # 빠른 쪽이 앞차다. 응답 순서를 믿지 않는다.
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=293))
+        self.assertEqual(got["stops"], 2)
+        self.assertEqual(got["thenAt"], NOW + datetime.timedelta(seconds=1158))
+        self.assertEqual(got["thenStops"], 11)
+
+    def test_한_대뿐이면_그다음은_없다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows",
+                lambda city, node: [arrival_row("999", 293, 2)]):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertNotIn("thenAt", got)
+
+    def test_지난_차는_그다음에도_안_들어간다(self):
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows",
+                lambda city, node: [arrival_row("999", -40, 0),
+                                    arrival_row("999", 293, 2),
+                                    arrival_row("999", 900, 8)]):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertEqual(got["at"], NOW + datetime.timedelta(seconds=293))
+        self.assertEqual(got["thenAt"], NOW + datetime.timedelta(seconds=900))
+
+    def test_잰_시각을_같이_준다(self):
+        """정류장 수의 나이를 화면이 재려면 이게 있어야 한다."""
+        with self.near(), mock.patch.object(
+                hs, "tago_arrival_rows",
+                lambda city, node: [arrival_row("999", 293, 2)]):
+            got = hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+        self.assertEqual(got["measuredAt"], NOW)
+
+
+class WaitingAtStopTests(unittest.TestCase):
+    """정류장에 **서서 기다리는 동안**에도 도착정보가 살아 있어야 한다.
+
+    진행도는 저장된 시간표에서 나온다. 버스가 늦으면 서 있는데도 승차 시각을
+    지나고, 그러면 "이미 탔다" 로 판정돼 값이 사라졌다 — 하필 그 값이 가장
+    필요한 순간이다(2026-08-26 시뮬레이터 검증에서 그렇게 사라졌다).
+    """
+
+    def test_좌표가_없으면_시간만으로_본다(self):
+        # 옛 계약 그대로 — 첫 보고 전에는 좌표가 없다.
+        self.assertIsNone(hs.next_bus_leg(LEGS, 4300))
+
+    def test_승차_지점_근처면_아직_기다리는_중이다(self):
+        found = hs.next_bus_leg(LEGS, 4300, 37.673180, 126.787167)
+        self.assertEqual(found["busNo"], "999")
+
+    def test_멀어졌으면_탄_것으로_본다(self):
+        # 승차 지점에서 2km 밖. 버스를 타고 움직이는 중이다.
+        self.assertIsNone(hs.next_bus_leg(LEGS, 4300, 37.6915, 126.787167))
 
 
 if __name__ == "__main__":
