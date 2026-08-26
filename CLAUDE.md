@@ -5,9 +5,11 @@
 
 ## 먼저 읽을 것
 
+- **[`docs/HANDOFF-2026-08-27.md`](docs/HANDOFF-2026-08-27.md)** — **여기서
+  시작한다.** 서울 버스가 열렸다, 서 있는 동안의 자동 갱신, GitHub 공개,
+  그리고 `rm -rf Server` 사고
 - **[`docs/HANDOFF-2026-08-26-bus.md`](docs/HANDOFF-2026-08-26-bus.md)** —
-  **여기서 시작한다.** 버스 실시간 도착을 붙인 기록. 다음 작업 순서와, 시험이
-  통과하는데 화면이 비던 두 사건
+  버스 실시간 도착을 붙인 기록. 시험이 통과하는데 화면이 비던 두 사건
 - **[`docs/HANDOFF-2026-08-26.md`](docs/HANDOFF-2026-08-26.md)** — 그날 오전.
   지하철 폴리라인, 8/25 실주행 사건을 끝까지 따라간 기록
 - **[`docs/HANDOFF-2026-08-21.md`](docs/HANDOFF-2026-08-21.md)** — 그 전날 한 일,
@@ -67,7 +69,7 @@
 
 ```bash
 python3 Tools/verify-progress-sync.py          # 카드 vs 지도, 실제 경로 28.4km
-cd Server && python3 -m unittest discover      # 서버 시험 98개
+cd Server && python3 -m unittest discover      # 서버 시험 107개
 ```
 
 ```bash
