@@ -99,7 +99,10 @@ class NearbyStopsTests(unittest.TestCase):
     def test_정류장_id_를_같이_준다(self):
         body = {"items": {"item": [stop_row("GGB219000638", "풍산역",
                                             37.67315, 126.7872167)]}}
-        with mock.patch.object(hs, "tago_stop_body", lambda lat, lon, limit: body):
+        # **키를 같이 붙잡아야 한다.** `nearby_stops` 는 `TAGO_KEY` 가 없으면
+        # 조회를 하지 않고 빈 목록으로 먼저 빠져나간다. 시험 환경에는 키가 없다.
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), \
+             mock.patch.object(hs, "tago_stop_body", lambda lat, lon, limit: body):
             stops = hs.nearby_stops(37.673072, 126.786906)
         self.assertEqual(stops[0]["id"], "GGB219000638")
         self.assertEqual(stops[0]["city"], 31100)
@@ -454,7 +457,9 @@ def bus_arrival(lat, lon, route_no, now=None):
     `expectedArrival` 이 이미 같은 규율로 쓰인다 — 절대시각을 주면 위젯이 스스로
     센다.
     """
-    at = now or globals()["now"]()
+    # 인자 이름이 모듈의 `now()` 를 가린다. 인자 이름을 바꾸면 부르는 쪽이
+    # 헷갈리므로 여기서 `datetime` 을 직접 쓴다.
+    at = now or datetime.now(timezone.utc)
     stop = arrival_stop(lat, lon)
     if not stop:
         return None
@@ -484,11 +489,8 @@ def bus_arrival(lat, lon, route_no, now=None):
     return {"no": want, "at": at + timedelta(seconds=seconds), "stops": stops_left}
 ```
 
-`bus_arrival` 이 모듈의 `now()` 함수와 인자 이름이 겹친다. `globals()["now"]()` 로
-부르는 것이 그 때문이다 — 인자 이름을 바꾸면 호출부가 헷갈리므로 이쪽을 택한다.
-
-`timedelta` 가 import 되어 있는지 확인한다. 없으면 파일 위쪽 `from datetime import
-datetime, timezone` 을 `from datetime import datetime, timedelta, timezone` 으로 고친다.
+`datetime` · `timedelta` · `timezone` 은 이미 import 되어 있다
+(`homecoming_server.py:38`). 더 넣을 것이 없다.
 
 - [ ] **Step 4: 시험이 통과하는 것을 본다**
 
