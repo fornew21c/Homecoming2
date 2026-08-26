@@ -975,6 +975,25 @@ _arrival_rows = {}
 ARRIVAL_CACHE_SECONDS = 30
 
 
+def tago_arrival_body(city_code, node_id):
+    """정류장 도착정보 조회의 응답 본문. 실패하면 None.
+
+    **HTTP 를 따로 뗀 이유는 시험이다.** `tago_stop_body` 와 같은 이유다 —
+    시험이 이 함수만 갈아 끼우면 나머지 정규화 로직을 망 없이 잴 수 있다.
+    """
+    query = urllib.parse.urlencode({
+        "serviceKey": TAGO_KEY, "cityCode": city_code, "nodeId": node_id,
+        "numOfRows": 100, "pageNo": 1, "_type": "json",
+    })
+    try:
+        with urllib.request.urlopen(f"{BUS_ARRIVAL}?{query}", timeout=8,
+                                    context=outbound_tls()) as response:
+            return json.loads(response.read().decode("utf-8"))["response"]["body"]
+    except Exception as error:                              # noqa: BLE001
+        log(f"  버스 도착정보 조회 실패: {error!r}")
+        return None
+
+
 def tago_arrival_rows(city_code, node_id):
     """그 정류장에 오는 버스들. 실패하면 빈 목록.
 
@@ -984,16 +1003,8 @@ def tago_arrival_rows(city_code, node_id):
     """
     if not TAGO_KEY:
         return []
-    query = urllib.parse.urlencode({
-        "serviceKey": TAGO_KEY, "cityCode": city_code, "nodeId": node_id,
-        "numOfRows": 100, "pageNo": 1, "_type": "json",
-    })
-    try:
-        with urllib.request.urlopen(f"{BUS_ARRIVAL}?{query}", timeout=8,
-                                    context=outbound_tls()) as response:
-            body = json.loads(response.read().decode("utf-8"))["response"]["body"]
-    except Exception as error:                              # noqa: BLE001
-        log(f"  버스 도착정보 조회 실패: {error!r}")
+    body = tago_arrival_body(city_code, node_id)
+    if body is None:
         return []
     items = body.get("items") or {}
     rows = items.get("item") if isinstance(items, dict) else None
@@ -1017,9 +1028,26 @@ def arrival_stop(lat, lon):
     """승차 좌표에 가장 가까운 정류장 → (도시코드, id). 못 찾으면 None.
 
     **같은 이름이 여럿이다.** 풍산역이라는 이름의 정류장이 다섯 곳이고 방향별로
-    갈린다(2026-08-26 실측). 목록 순서를 믿지 않고 거리로 고른다 — 승차 좌표에서
-    `GGB219000638` 이 약 15m, 다음 후보가 약 32m 다. `bus_leg_waypoints` 가
-    좌표를 고르는 방식과 같은 규율이다.
+    갈린다. 목록 순서를 믿지 않고 거리로 고른다 — 승차 좌표에서 잰 값이다
+    (2026-08-26, `haversine`):
+
+        GGB219000638     15.1m   ← 고르는 것
+        GGB219001069     35.8m
+        GGB219001032     51.6m
+        GGB219000608    119.9m
+        GGB219000606    133.9m
+
+    **이 함수는 `route_no` 를 모른다.** 그 노선이 서는 정류장인지 안 보고 가장
+    가까운 것만 고른다. `bus_leg_waypoints` 와 다른 점이 여기다 — 그쪽은 노선의
+    경유 정류장 목록으로 후보를 먼저 거른 뒤 방향을 가린다.
+
+    그래서 **승차 좌표로만 불러야 한다** — 경로에 저장된 버스 구간의 첫 점이다.
+    다른 좌표(지금 GPS 같은)로 부르면 길 건너 반대 방향 정류장을 고를 수 있고,
+    그 정류장에 같은 번호가 반대로 서면 틀린 시각이 나간다. 승차 좌표는 그 노선을
+    실제로 탄 자리라 그 위험이 없다.
+
+    노선이 안 서는 정류장을 골랐을 때는 `bus_arrival` 이 그 노선을 못 찾아
+    None 이 된다. 틀린 값을 그리는 것보다 안 그리는 쪽이다.
     """
     key = (round(lat, 5), round(lon, 5))
     if key in _arrival_stops:

@@ -108,8 +108,8 @@ class BusArrivalTests(unittest.TestCase):
 
         with self.near(), mock.patch.object(hs, "tago_arrival_rows", rows):
             hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
-        # 승차 좌표에서 가장 가까운 것이 GGB219000638 이다(실측 약 15m,
-        # 다음 후보가 약 32m). 목록 순서가 아니라 거리로 골라야 한다.
+        # 승차 좌표에서 가장 가까운 것이 GGB219000638 이다(15.1m, 다음 후보인
+        # GGB219001069 가 35.8m). 목록 순서가 아니라 거리로 골라야 한다.
         self.assertEqual(seen[0], "GGB219000638")
 
     def test_그_노선이_안_오면_아무것도_안_준다(self):
@@ -152,6 +152,63 @@ class BusArrivalTests(unittest.TestCase):
             hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
             hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
         self.assertEqual(len(calls), 1)
+
+    def test_도착정보를_30초_동안_다시_안_묻는다(self):
+        """호출 예산이 이 캐시에 걸려 있다. 창 안에서는 안 묻고 밖에서는 묻는다."""
+        calls = []
+
+        def rows(city, node):
+            calls.append(1)
+            return PUNGSAN_ROWS
+
+        with self.near(), mock.patch.object(hs, "tago_arrival_rows", rows):
+            hs.bus_arrival(BOARD_LAT, BOARD_LON, "999", now=NOW)
+            hs.bus_arrival(BOARD_LAT, BOARD_LON, "999",
+                           now=NOW + datetime.timedelta(seconds=29))
+            self.assertEqual(len(calls), 1)
+            # 30초는 이미 낡은 것으로 본다 — 비교가 `<` 다.
+            hs.bus_arrival(BOARD_LAT, BOARD_LON, "999",
+                           now=NOW + datetime.timedelta(seconds=30))
+            self.assertEqual(len(calls), 2)
+
+
+class TagoArrivalBodyNormalizationTests(unittest.TestCase):
+    """`tago_arrival_rows` 의 응답 정규화. TAGO 는 정상 요청에도 자료 모양이
+    들쭉날쭉하다(`tago_stop_body` 의 주석과 같은 사정) — 여기서 직접 잰다.
+    """
+
+    def test_여러_대면_목록_그대로(self):
+        body = {"items": {"item": [arrival_row("999", 582, 6),
+                                    arrival_row("81", 1217, 14)]}}
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), mock.patch.object(
+                hs, "tago_arrival_body", lambda city, node: body):
+            rows = hs.tago_arrival_rows(31100, "GGB219000638")
+        self.assertEqual(rows, [arrival_row("999", 582, 6),
+                                 arrival_row("81", 1217, 14)])
+
+    def test_한_대면_목록으로_감싼다(self):
+        """`item` 이 배열이 아니라 객체 하나로 오는 경우다(딱 한 대일 때)."""
+        body = {"items": {"item": arrival_row("999", 582, 6)}}
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), mock.patch.object(
+                hs, "tago_arrival_body", lambda city, node: body):
+            rows = hs.tago_arrival_rows(31100, "GGB219000638")
+        self.assertEqual(rows, [arrival_row("999", 582, 6)])
+
+    def test_items_가_없으면_빈_목록(self):
+        """막차가 끊긴 정류장은 `items` 가 빈 문자열로 온다."""
+        body = {"items": ""}
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), mock.patch.object(
+                hs, "tago_arrival_body", lambda city, node: body):
+            rows = hs.tago_arrival_rows(31100, "GGB219000638")
+        self.assertEqual(rows, [])
+
+    def test_호출이_실패하면_빈_목록(self):
+        """`tago_arrival_body` 가 None 을 주는 경우 — 위쪽(`bus_arrival`)까지
+        예외 없이 흘러가야 한다."""
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), mock.patch.object(
+                hs, "tago_arrival_body", lambda city, node: None):
+            rows = hs.tago_arrival_rows(31100, "GGB219000638")
+        self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":
