@@ -251,6 +251,24 @@ struct ContentView: View {
                 sessionID: coordinator.sessionID,
                 routes: environment.routeGeometry
             )
+            // **서 있는 동안에는 아무것도 갱신을 안 일으킨다.** 갱신의 유일한
+            // 계기가 위치 보고인데 그건 150m 를 움직여야 나간다 — 정류장에서
+            // 버스를 기다리는 그 시간이 정확히 그 상태다. 그래서 화면이 앞에
+            // 있는 동안만 스스로 다시 묻는다.
+            //
+            // **칩이 떠 있을 때만 돈다.** `busArrivalNo` 가 없으면 물어도
+            // 나올 것이 없고, 그러면 승차 15분 전이 아닌 내내 공공데이터를
+            // 태운다. 첫 값은 걸어가는 동안 위치 보고가 가져온다.
+            //
+            // 30초는 서버 캐시와 같은 주기다. 더 자주 불러도 같은 값이 온다.
+            .task(id: state.busArrivalNo) {
+                guard state.busArrivalNo != nil else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled else { return }
+                    await coordinator.refreshBusArrival()
+                }
+            }
         }
     }
 
