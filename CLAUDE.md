@@ -5,8 +5,10 @@
 
 ## 먼저 읽을 것
 
-- **[`docs/HANDOFF-2026-08-21.md`](docs/HANDOFF-2026-08-21.md)** — **여기서 시작한다.**
-  다음 작업 순서, 어제 한 일, 그날 새로 걸린 함정(공공데이터 일일 한도 1,000회 등)
+- **[`docs/HANDOFF-2026-08-26.md`](docs/HANDOFF-2026-08-26.md)** — **여기서 시작한다.**
+  다음 작업 순서, 지하철 폴리라인, 8/25 실주행 사건을 끝까지 따라간 기록
+- **[`docs/HANDOFF-2026-08-21.md`](docs/HANDOFF-2026-08-21.md)** — 그 전날 한 일,
+  공공데이터 일일 한도 1,000회 등
 - **[`docs/HANDOFF-2026-08-20.md`](docs/HANDOFF-2026-08-20.md)** — 배포 정보, 이 환경의
   함정(사내망 TLS 등), 그 전까지 한 일
 - **[`docs/superpowers/specs/2026-08-20-progress-unification-design.md`](docs/superpowers/specs/2026-08-20-progress-unification-design.md)**
@@ -42,9 +44,13 @@
 그건 자 차이다(앱 측지선 · 서버 구). **자른 길이를 앱 자로 되재면 안 된다** — 요청한
 값과 같은 것이 당연해서 0m 가 나온다. 자른 자리를 서버 자로 되재야 값이 나온다.
 
+**지하철 구간은 역을 거쳐 그린다.** 두 역 직선으로 그리던 것이 실제 선로에서
+1,994m 벌어져 이탈로 오판됐다(2026-08-25). 역 좌표는 `Server/data/subway-lines.json`
+에 구워 두고 `GET /subway/leg` 가 준다 — `docs/HANDOFF-2026-08-26.md` 참고.
+
 ```bash
 python3 Tools/verify-progress-sync.py          # 카드 vs 지도, 실제 경로 28.4km
-cd Server && python3 -m unittest discover      # 서버 시험 38개
+cd Server && python3 -m unittest discover      # 서버 시험 61개
 ```
 
 ```bash
