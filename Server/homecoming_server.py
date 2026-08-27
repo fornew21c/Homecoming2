@@ -2638,6 +2638,28 @@ def arrival_says(legs, progress, why):
     return None
 
 
+# 새로고침을 몰아 눌러도 이 안쪽이면 방금 잰 값을 그대로 쓴다.
+#
+# **3초는 뜻이 있는 문턱이다.** 실측에서 정류장 수가 약 57초에 하나씩 줄었다
+# (`busArrivalMeasuredAt` 주석). 3초 안에 다시 물어도 같은 값이 온다. 사람이
+# 누르는 경우는 왕복(1~4초)에 반응 시간이 붙어 여기 안 걸린다.
+ARRIVAL_BURST_SECONDS = 3
+
+
+def arrival_recently_measured(route_no, lat, lon, at):
+    """방금 잰 값이 있나. 돌려주는 것 — (문턱 안인가, 그 값).
+
+    **자원을 가진 쪽이 막는다.** 2026-08-27 에 앱이 칩이 처음 뜬 직후
+    `/bus-arrival` 을 1초 간격으로 네 번 불렀다. 부르는 쪽의 원인은 아직 못
+    찾았지만, 공공데이터 한도를 네 배로 태우는 것은 그와 무관하게 막아야 한다.
+    """
+    cached = _arrival_ready.get((str(route_no), lat, lon))
+    if not cached:
+        return False, None
+    measured, value = cached
+    return (at - measured).total_seconds() < ARRIVAL_BURST_SECONDS, value
+
+
 def arrival_ready(legs, progress, now=None, lat=None, lon=None):
     """다음 버스의 도착값 — **캐시에 있는 것만.** 없으면 None 이고 배경에서 채운다.
 
@@ -3739,12 +3761,19 @@ class Handler(BaseHTTPRequestHandler):
         points = (leg or {}).get("points") or []
         if leg and points:
             lat, lon = points[0][0], points[0][1]
-            # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
-            _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
-            value = bus_arrival(lat, lon, leg["busNo"])
-            _arrival_ready[(str(leg["busNo"]), lat, lon)] = (now(), value)
-            log(f"  버스 {leg['busNo']} 도착 새로고침 → "
-                f"{iso(value['at']) if value else '없음'}")
+            burst, value = arrival_recently_measured(leg["busNo"], lat, lon, now())
+            if burst:
+                # 몰아 부른 것이다. 방금 잰 값을 그대로 쓴다 — 다시 물어도 같은
+                # 값이 오고, 공공데이터 한도만 태운다.
+                log(f"  버스 {leg['busNo']} 도착 새로고침 건너뜀 — "
+                    f"{ARRIVAL_BURST_SECONDS}초 안에 이미 물었다")
+            else:
+                # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
+                _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
+                value = bus_arrival(lat, lon, leg["busNo"])
+                _arrival_ready[(str(leg["busNo"]), lat, lon)] = (now(), value)
+                log(f"  버스 {leg['busNo']} 도착 새로고침 → "
+                    f"{iso(value['at']) if value else '없음'}")
 
         return self.reply(200, {"ok": True, "state": content_state(session)})
 

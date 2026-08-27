@@ -455,5 +455,41 @@ class RealDatabaseGuardTests(unittest.TestCase):
                         f"기본 DB 경로가 상대경로다: {default}")
 
 
+class ArrivalBurstTests(unittest.TestCase):
+    """**같은 값을 몰아 묻는 것을 막는다.**
+
+    2026-08-27 실측 — 칩이 처음 뜬 직후 앱이 `/bus-arrival` 을 1초 간격으로 네 번
+    불렀다(04:13:53 · :54 · :55 · :57). 그 뒤로는 33초로 정상이었다. 부르는 쪽의
+    원인은 아직 못 찾았고, **한도를 네 배로 태우는 것은 그와 무관하게 막아야 한다.**
+
+    3초는 뜻이 있는 문턱이다. 실측에서 정류장 수가 약 57초에 하나씩 줄었다
+    (`busArrivalMeasuredAt` 주석). 3초 안에 다시 물어도 같은 값이 온다. 사람이
+    누르는 경우는 왕복(1~4초)에 반응 시간이 붙어 이 문턱에 안 걸린다.
+    """
+
+    def setUp(self):
+        hs._arrival_ready.clear()
+
+    def test_방금_잰_값이_있으면_다시_안_묻는다(self):
+        from datetime import timedelta
+        at = hs.now()
+        hs._arrival_ready[("163", 37.5, 126.9)] = (at - timedelta(seconds=1), {"no": "163"})
+        fresh, value = hs.arrival_recently_measured("163", 37.5, 126.9, at)
+        self.assertTrue(fresh)
+        self.assertEqual(value, {"no": "163"})
+
+    def test_문턱을_넘으면_다시_묻는다(self):
+        from datetime import timedelta
+        at = hs.now()
+        hs._arrival_ready[("163", 37.5, 126.9)] = (at - timedelta(seconds=4), {"no": "163"})
+        fresh, _ = hs.arrival_recently_measured("163", 37.5, 126.9, at)
+        self.assertFalse(fresh)
+
+    def test_잰_적이_없으면_묻는다(self):
+        fresh, value = hs.arrival_recently_measured("163", 37.5, 126.9, hs.now())
+        self.assertFalse(fresh)
+        self.assertIsNone(value)
+
+
 if __name__ == "__main__":
     unittest.main()
