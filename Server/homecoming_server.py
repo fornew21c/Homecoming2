@@ -1200,12 +1200,42 @@ def gbis_route_stops(route_id):
                 "lat": float(row["y"]),
                 "lon": float(row["x"]),
                 "seq": int(row["stationSeq"]),
+                # 회차점. 여기서 노선이 돌아 나온다 — 앞뒤로 방향이 갈린다.
+                "turn": row.get("turnYn") == "Y",
             })
         except (KeyError, TypeError, ValueError):
             continue
     stops.sort(key=lambda stop: stop["seq"])
     _gbis_route_stops[key] = stops
     return stops
+
+
+def route_direction(stops, ars):
+    """그 기둥에 서는 차가 **어느 쪽으로 가는가**. 모르면 None.
+
+    회차점(`turnYn=Y`) 앞이면 회차점 쪽, 뒤면 종점 쪽이다. 999 실측
+    (2026-08-27) — 92개, seq 1 대화역(중) 출발 · seq 45 신원중학교 회차 ·
+    seq 92 대화역(중) 종점.
+
+        20753  seq 13  ≤ 45  → 신원중학교 방면
+        58271  seq 78  >  45 → 대화역(중) 방면
+
+    경유노선 조회가 따로 말해 주는 값과 같다. **이미 받아 온 목록에서 나오므로
+    조회가 늘지 않는다.**
+
+    **길 양쪽 기둥을 사람이 가리는 데 쓴다.** 노선번호로 좁혀도 상·하행 둘이
+    남는데, 귀가하는 사람은 자기가 어느 방향으로 가는지 안다. 자동으로 정하지
+    않는다 — 여기는 사람이 보고 있는 화면이다.
+    """
+    if not stops:
+        return None
+    here = next((s for s in stops if s.get("no") == str(ars)), None)
+    if not here:
+        return None
+    turn = next((s for s in stops if s.get("turn")), None)
+    if turn and here["seq"] <= turn["seq"]:
+        return turn["name"]
+    return stops[-1]["name"]
 
 
 def stops_named(stops, name):
@@ -1728,6 +1758,30 @@ def route_stop_numbers(route_no):
             if ars:
                 numbers.add(ars)
     return numbers
+
+
+def label_directions(stops, route_no):
+    """좁혀진 정류장에 **방면**을 적어 준다. 모르면 안 적는다.
+
+    노선번호로 좁혀도 길 양쪽 두 기둥이 남는다(풍산역 20753 · 58271). 둘 다 그
+    노선이 서니 자료로는 더 못 줄인다. **그런데 귀가하는 사람은 자기가 어느
+    방향으로 가는지 안다** — 한 단어만 보여 주면 고를 수 있다.
+
+    자동으로 정하지 않는다. 여기는 사람이 보고 있는 화면이다.
+    """
+    for route_id in gbis_route_ids(route_no):
+        on_route = gbis_route_stops(route_id)
+        if not on_route:
+            continue
+        marked = False
+        for stop in stops:
+            where = route_direction(on_route, stop.get("ars"))
+            if where:
+                stop["dest"] = where
+                marked = True
+        if marked:
+            return stops
+    return stops
 
 
 def narrow_by_route(stops, route_no):
@@ -3365,6 +3419,9 @@ class Handler(BaseHTTPRequestHandler):
                 route_no = (query.get("route", [""])[0] or "").strip()
                 if route_no:
                     narrowed = narrow_by_route(found, route_no)
+                    # 좁혀도 길 양쪽 둘이 남는다. 어느 쪽으로 가는 차인지
+                    # 적어 주면 사람이 고른다.
+                    label_directions(narrowed, route_no)
                     log(f"  정류장 '{text}' + {route_no}번 → "
                         f"{len(found)}건 중 {len(narrowed)}건")
                     found = narrowed

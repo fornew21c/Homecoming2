@@ -125,7 +125,7 @@ class GbisRouteStopsTests(unittest.TestCase):
         self.assertEqual([s["seq"] for s in stops], [13, 14])
         self.assertEqual(stops[0], {"id": "GGB219000638", "no": "20753",
                                     "name": "풍산역", "lat": 37.67315,
-                                    "lon": 126.7872167, "seq": 13})
+                                    "lon": 126.7872167, "seq": 13, "turn": False})
 
     def test_id_는_TAGO_와_같은_모양이다(self):
         # TAGO 는 GGB219000638, GBIS 는 219000638 — 같은 번호다(2026-08-27 확인).
@@ -599,6 +599,47 @@ class StopSearchByRouteTests(unittest.TestCase):
                   "lat": 0, "lon": 0, "seq": 1}]
         got = self.narrow("999", other)
         self.assertEqual(got, self.STOPS)
+
+
+class RouteDirectionTests(unittest.TestCase):
+    """**어느 쪽으로 가는 차인가.** 회차점 앞이면 회차점 쪽, 뒤면 종점 쪽이다.
+
+    999 실측(2026-08-27) — 92개, seq 1 대화역(중) 출발 · seq 45 신원중학교
+    회차(`turnYn=Y`) · seq 92 대화역(중) 종점.
+
+        20753  seq 13  ≤ 45  → 신원중학교 방면
+        58271  seq 78  >  45 → 대화역(중) 방면
+
+    경유노선 조회(`getBusStationViaRouteListv2`)가 따로 말해 주는 값과 같다.
+    **이미 받아 온 목록에서 나오므로 조회가 늘지 않는다.**
+    """
+
+    ROUTE = [
+        {"id": "a", "no": "20434", "name": "대화역(중)", "lat": 0, "lon": 0, "seq": 1},
+        {"id": "b", "no": "20753", "name": "풍산역", "lat": 0, "lon": 0, "seq": 13},
+        {"id": "c", "no": "30001", "name": "신원중학교", "lat": 0, "lon": 0, "seq": 45,
+         "turn": True},
+        {"id": "d", "no": "58271", "name": "풍산역", "lat": 0, "lon": 0, "seq": 78},
+        {"id": "e", "no": "20434", "name": "대화역(중)", "lat": 0, "lon": 0, "seq": 92},
+    ]
+
+    def test_회차점_앞이면_회차점_방면(self):
+        self.assertEqual(hs.route_direction(self.ROUTE, "20753"), "신원중학교")
+
+    def test_회차점_뒤면_종점_방면(self):
+        self.assertEqual(hs.route_direction(self.ROUTE, "58271"), "대화역(중)")
+
+    def test_회차점이_없으면_종점_방면(self):
+        straight = [dict(s) for s in self.ROUTE]
+        for s in straight:
+            s.pop("turn", None)
+        self.assertEqual(hs.route_direction(straight, "20753"), "대화역(중)")
+
+    def test_그_기둥이_없으면_모른다(self):
+        self.assertIsNone(hs.route_direction(self.ROUTE, "99999"))
+
+    def test_목록이_비면_모른다(self):
+        self.assertIsNone(hs.route_direction([], "20753"))
 
 
 if __name__ == "__main__":
