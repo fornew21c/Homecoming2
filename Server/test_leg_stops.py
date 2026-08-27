@@ -9,12 +9,20 @@
 의존성 없음. 표준 unittest 다.
 """
 
+import tempfile
+import os
 import io
 import json as _json
 import pathlib
 import sys
 import unittest
 from unittest import mock
+
+# **시험은 진짜 DB 에 안 붙는다.** `DB_PATH` 는 import 할 때 정해지고, 여기서
+# 안 걸면 먼저 import 되는 쪽이 이겨 저장소의 DB 를 쓴다 — 다른 시험의
+# `DELETE FROM` 이 실제 경로를 지운다(2026-08-27 에 실제로 그랬다).
+_TMP = tempfile.mkdtemp()
+os.environ.setdefault("HOMECOMING_DB", str(pathlib.Path(_TMP) / "test.sqlite"))
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -408,6 +416,43 @@ class QueryCoordinateTests(unittest.TestCase):
         q = self.query("toLat=abc&toLon=126.8")
         with self.assertRaises(hs.BadCoordinate):
             hs.query_coordinate(q, "toLat", "toLon")
+
+
+class RealDatabaseGuardTests(unittest.TestCase):
+    """**시험이 진짜 DB 에 붙으면 안 된다.**
+
+    `DB_PATH` 는 import 할 때 한 번 정해지고 기본값이 상대경로다. 시험 모듈이
+    `HOMECOMING_DB` 를 안 걸면, 먼저 import 되는 쪽이 이겨서 저장소의
+    `Server/homecoming.sqlite` 에 붙는다. 그러면 다른 시험의 `DELETE FROM` 이
+    실제 경로를 지운다 — **2026-08-27 에 실제로 그랬다.** 저장된 `퇴근길` 이
+    날아갔다.
+
+    돌리는 자리에 따라 결과가 갈리는 것도 같은 뿌리다 —
+      cd Server && python3 -m unittest discover   → Server/Server/homecoming.sqlite
+      python3 -m unittest discover -s Server      → 진짜 DB 를 지운다
+
+    이 시험이 그 길을 막는다. **새 시험 파일을 만들 때 `HOMECOMING_DB` 를
+    빠뜨리면 여기서 걸린다.**
+    """
+
+    def test_시험은_저장소_DB_에_안_붙는다(self):
+        repo_db = (pathlib.Path(__file__).resolve().parent / "homecoming.sqlite")
+        self.assertNotEqual(pathlib.Path(hs.DB_PATH).resolve(), repo_db,
+                            "시험이 저장소의 진짜 DB 를 쓰고 있다 — "
+                            "먼저 import 되는 시험 파일이 HOMECOMING_DB 를 안 걸었다")
+
+    def test_DB_PATH_기본값이_절대경로다(self):
+        # 상대경로면 돌리는 자리에 따라 Server/Server/ 가 생긴다.
+        import os
+        saved = os.environ.pop("HOMECOMING_DB", None)
+        try:
+            import importlib
+            default = hs.default_db_path()
+        finally:
+            if saved is not None:
+                os.environ["HOMECOMING_DB"] = saved
+        self.assertTrue(pathlib.Path(default).is_absolute(),
+                        f"기본 DB 경로가 상대경로다: {default}")
 
 
 if __name__ == "__main__":

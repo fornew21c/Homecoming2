@@ -9,12 +9,20 @@
 의존성 없음. 표준 unittest 다.
 """
 
+import tempfile
+import os
 import datetime
 import pathlib
 import sys
 import time
 import unittest
 from unittest import mock
+
+# **시험은 진짜 DB 에 안 붙는다.** `DB_PATH` 는 import 할 때 정해지고, 여기서
+# 안 걸면 먼저 import 되는 쪽이 이겨 저장소의 DB 를 쓴다 — 다른 시험의
+# `DELETE FROM` 이 실제 경로를 지운다(2026-08-27 에 실제로 그랬다).
+_TMP = tempfile.mkdtemp()
+os.environ.setdefault("HOMECOMING_DB", str(pathlib.Path(_TMP) / "test.sqlite"))
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 

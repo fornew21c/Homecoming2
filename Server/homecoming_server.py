@@ -85,7 +85,19 @@ APNS_HOST = (
 # DB 위치. **배포에서는 반드시 영구 디스크를 가리켜야 한다.**
 # 컨테이너의 기본 파일 시스템은 배포할 때마다 사라진다 — 그러면 계정과 가족
 # 연결과 저장한 경로가 매 배포마다 날아가고, 가족은 다시 페어링해야 한다.
-DB_PATH = os.environ.get("HOMECOMING_DB", "Server/homecoming.sqlite")
+def default_db_path():
+    """`HOMECOMING_DB` 가 없을 때 쓸 자리. **이 파일 옆이다.**
+
+    예전에는 `"Server/homecoming.sqlite"` 라는 **상대경로**였다. 그래서 돌리는
+    자리에 따라 다른 파일이 됐다 — `cd Server` 에서 돌리면 `Server/Server/`
+    가 새로 생겼고, 그 유령 폴더를 치우려던 `rm -rf Server` 가 진짜 `Server/`
+    를 지웠다(2026-08-26). 절대경로면 그 갈래가 없다.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "homecoming.sqlite")
+
+
+DB_PATH = os.environ.get("HOMECOMING_DB") or default_db_path()
 
 INVITE_TTL_MINUTES = 30
 
