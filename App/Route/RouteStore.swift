@@ -45,9 +45,9 @@ final class RouteStore {
     }
 
     /// 이름으로 찾은 버스정류장. 실패하면 빈 목록이다.
-    func stopsNamed(_ text: String) async -> [BusStop] {
+    func stopsNamed(_ text: String, route: String? = nil) async -> [BusStop] {
         guard isAvailable else { return [] }
-        return (try? await client.stops(named: text)) ?? []
+        return (try? await client.stops(named: text, route: route)) ?? []
     }
 
     /// 이 좌표 근처의 진짜 버스정류장. 실패하면 빈 목록이다 —

@@ -37,7 +37,7 @@ protocol RouteClient: Sendable {
     func stops(near coordinate: CLLocationCoordinate2D) async throws -> [BusStop]
 
     /// 이름으로 정류장을 찾는다. 애플 지도가 모르는 이름을 공공데이터는 안다.
-    func stops(named text: String) async throws -> [BusStop]
+    func stops(named text: String, route: String?) async throws -> [BusStop]
 
     /// 버스 한 구간이 실제로 지나는 정류장 좌표. 빈 배열이면 그릴 것이 없다.
     ///
@@ -96,6 +96,13 @@ struct BusStop: Sendable, Identifiable, Equatable {
     let coordinate: CLLocationCoordinate2D
     /// 정류장 기둥에 적힌 번호. 같은 이름이 여럿일 때 사람이 구분하는 값이다.
     let number: Int?
+
+    /// 그 기둥에서 차가 **다음에 서는 정류장**. 노선번호를 함께 물었을 때만 온다.
+    ///
+    /// **길 양쪽 기둥을 가리는 값이다.** 노선번호로 좁혀도 상·하행 둘이 남는데
+    /// (풍산역 20753 · 58271) 이름이 같고 번호는 거기 가야 읽는다. 다음 정류장은
+    /// 가는 방향에 있는 이름이라 앉아서도 알아본다.
+    var nextStop: String? = nil
 
     var id: String { "\(name)-\(coordinate.latitude)-\(coordinate.longitude)" }
 
@@ -432,21 +439,31 @@ struct RemoteRouteClient: RouteClient {
         }
     }
 
-    func stops(named text: String) async throws -> [BusStop] {
+    func stops(named text: String, route: String?) async throws -> [BusStop] {
         guard let escaped = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               !escaped.isEmpty
         else { return [] }
         struct Response: Decodable {
             struct Stop: Decodable {
                 let name: String; let lat: Double; let lon: Double; let ars: String?
+                /// 그 기둥에서 다음에 서는 정류장. 노선번호를 줬을 때만 온다.
+                let next: String?
             }
             let stops: [Stop]
         }
-        let response: Response = try await get("stops?q=\(escaped)")
+        // **노선번호를 알면 함께 보낸다.** 서버가 그 노선이 서는 기둥만 준다 —
+        // `풍산역` 8건이 2건이 되고, 하남풍산역 같은 딴 동네가 걸러진다.
+        var path = "stops?q=\(escaped)"
+        if let route = route?.trimmingCharacters(in: .whitespaces), !route.isEmpty,
+           let escapedRoute = route.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            path += "&route=\(escapedRoute)"
+        }
+        let response: Response = try await get(path)
         return response.stops.map {
             BusStop(name: $0.name,
                     coordinate: CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon),
-                    number: $0.ars.flatMap(Int.init))
+                    number: $0.ars.flatMap(Int.init),
+                    nextStop: $0.next)
         }
     }
 
@@ -499,7 +516,7 @@ struct UnavailableRouteClient: RouteClient {
     }
     func delete(id: String) async throws { throw RouteError.unavailable }
     func stops(near coordinate: CLLocationCoordinate2D) async throws -> [BusStop] { [] }
-    func stops(named text: String) async throws -> [BusStop] { [] }
+    func stops(named text: String, route: String?) async throws -> [BusStop] { [] }
     func busWaypoints(no: String, from: CLLocationCoordinate2D,
                       to: CLLocationCoordinate2D,
                       fromName: String, toName: String) async throws -> [CLLocationCoordinate2D] { [] }

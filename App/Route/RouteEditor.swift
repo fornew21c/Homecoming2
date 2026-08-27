@@ -173,6 +173,22 @@ struct RouteEditor: View {
         }
     }
 
+    /// 이 구간의 도착지에서 **탈 버스의 노선번호.** 없으면 nil.
+    ///
+    /// 이 구간이 버스면 그 번호다. 아니면 다음 구간의 번호다 — 승차 정류장은
+    /// 도보 구간의 도착지이고 그 구간에는 노선번호가 없기 때문이다.
+    /// `퇴근길` 의 `풍산역 버스정류장`(도보) → `999`(버스)가 그 자리다.
+    private func boardingRouteNo(at index: Int) -> String? {
+        func number(_ step: RouteTracer.Step) -> String? {
+            guard step.mode == .bus else { return nil }
+            let no = (step.busNo ?? "").trimmingCharacters(in: .whitespaces)
+            return no.isEmpty ? nil : no
+        }
+        if let own = number(steps[index]) { return own }
+        let next = index + 1
+        return next < steps.count ? number(steps[next]) : nil
+    }
+
     private var stepList: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -197,6 +213,7 @@ struct RouteEditor: View {
                     isLast: index == steps.count - 1,
                     homeName: home.name,
                     store: store,
+                    boardingRouteNo: boardingRouteNo(at: index),
                     onDelete: steps.count > 1 ? { steps.remove(at: index) } : nil
                 )
             }
@@ -323,6 +340,12 @@ private struct StepRow: View {
     let isLast: Bool
     let homeName: String
     let store: RouteStore
+    /// **이 구간의 도착지에서 탈 버스의 노선번호.**
+    ///
+    /// 이 구간이 버스면 그 번호이고, 아니면 **다음 구간**의 번호다 — 승차
+    /// 정류장은 도보 구간의 도착지라 그 구간에는 노선번호가 없다. `퇴근길` 의
+    /// `풍산역 버스정류장` 이 그 자리다.
+    let boardingRouteNo: String?
     let onDelete: (() -> Void)?
 
     /// 검색이 준 원래 이름. 사용자가 이름을 고쳐도 "어디를 찍었는지" 는 남아야 한다.
@@ -379,7 +402,8 @@ private struct StepRow: View {
                 PlacePicker(
                     title: step.to == nil ? "도착지를 찾으세요" : (found.isEmpty ? "위치 지정됨" : found),
                     near: near,
-                    store: store
+                    store: store,
+                    routeNo: boardingRouteNo
                 ) { hit in
                     found = hit.name
                     step.to = hit.coordinate
@@ -429,14 +453,27 @@ private struct PlacePicker: View {
     let title: String
     let near: CLLocationCoordinate2D
     let store: RouteStore
+    /// 이 자리에서 탈 버스의 노선번호. 있으면 그 노선이 서는 기둥만 나온다.
+    ///
+    /// **이 구간의 것이 아닐 수 있다.** 승차 정류장은 도보 구간의 도착지라
+    /// 그 구간에는 노선번호가 없다 — 부르는 쪽이 `다음 구간의 것` 을 넘긴다.
+    var routeNo: String? = nil
     var onPick: (PlaceSearch.Hit) -> Void
 
     private let accent = Color(red: 0.42, green: 0.85, blue: 0.62)
 
     /// 같은 이름이 방향별로 여럿이라 ARS 번호로 구분한다.
     /// 정류장 기둥에 적힌 번호라 사람이 눈으로 맞출 수 있다.
+    /// 목록 한 줄의 부제. **같은 이름이 여럿일 때 이것으로 고른다.**
+    ///
+    /// 기둥번호만으로는 앉아서 고를 수가 없다 — 그 번호는 정류장에 가서 읽는
+    /// 값이다. 노선번호를 함께 물었으면 `다음 정류장` 이 오고, 그게 가는
+    /// 방향을 말해 준다(풍산역 20753 은 애니골입구, 58271 은 밤가시7.8단지).
     private func stopContext(_ stop: BusStop) -> String? {
-        stop.number.map { "정류장 번호 \($0)" }
+        var parts: [String] = []
+        if let number = stop.number { parts.append("정류장 번호 \(number)") }
+        if let next = stop.nextStop { parts.append("다음 \(next)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func findStops(_ query: String) {
@@ -451,7 +488,7 @@ private struct PlacePicker: View {
             // 한 글자마다 서버를 부를 이유가 없다.
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            let found = await store.stopsNamed(query)
+            let found = await store.stopsNamed(query, route: routeNo)
             guard !Task.isCancelled else { return }
             stops = found
             isLookingUp = false
