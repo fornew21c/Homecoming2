@@ -1134,6 +1134,29 @@ def gbis_get(path, params):
     return inner.get("msgBody") or {}
 
 
+def gbis_route_ids(route_no):
+    """그 번호를 쓰는 경기도 노선 id 들. 순서는 자료가 준 그대로.
+
+    **같은 번호가 여럿이다** — 999 는 고양(218000111)과 수원·용인·화성
+    (200000013) 둘이다(2026-08-27 실측). 여기서 고르지 않는다. **고르는 것은
+    정류장 이름이 한다** — 두 이름이 다 들어 있는 노선만 뒤에서 살아남는다.
+    `bus_route_stop_names` 가 이미 같은 방법을 쓴다.
+
+    `keyword` 는 부분일치라 `999` 로 물으면 `N999` 도 온다. 번호가 정확히
+    같은 것만 받는다.
+    """
+    key = str(route_no).strip()
+    if key in _gbis_routes:
+        return _gbis_routes[key]
+    body = gbis_get("busrouteservice/v2/getBusRouteListv2", {"keyword": key})
+    if body is None:
+        return []                  # **실패는 캐시하지 않는다.** 다음에 다시 묻는다
+    ids = [str(row["routeId"]) for row in body.get("busRouteList") or []
+           if row.get("routeId") and str(row.get("routeName") or "").strip() == key]
+    _gbis_routes[key] = ids
+    return ids
+
+
 # --- 서울 버스 실시간 도착 --------------------------------------------------
 #
 # **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을

@@ -54,5 +54,51 @@ class GbisGetTests(unittest.TestCase):
             self.assertIsNone(hs.gbis_get("x", {}))
 
 
+class GbisRouteIdsTests(unittest.TestCase):
+
+    def setUp(self):
+        hs._gbis_routes.clear()
+
+    def reply(self, body):
+        return mock.patch.object(hs, "gbis_get", lambda _p, _q: body)
+
+    def test_번호가_정확히_같은_것만_받는다(self):
+        # `999` 로 물으면 `N999` 도 같이 온다(2026-08-27 실측).
+        with self.reply({"busRouteList": [
+            {"routeId": 218000111, "routeName": 999},
+            {"routeId": 200000013, "routeName": 999},
+            {"routeId": 218000168, "routeName": "N999"},
+        ]}):
+            self.assertEqual(hs.gbis_route_ids("999"), ["218000111", "200000013"])
+
+    def test_결과가_없으면_빈_목록이다(self):
+        with self.reply({}):
+            self.assertEqual(hs.gbis_route_ids("없는번호"), [])
+
+    def test_한_번_찾은_것은_다시_묻지_않는다(self):
+        calls = []
+
+        def get(_p, _q):
+            calls.append(1)
+            return {"busRouteList": [{"routeId": 1, "routeName": "66"}]}
+
+        with mock.patch.object(hs, "gbis_get", get):
+            hs.gbis_route_ids("66")
+            hs.gbis_route_ids("66")
+        self.assertEqual(len(calls), 1, "두 번째는 요청을 내면 안 된다")
+
+    def test_실패는_캐시하지_않는다(self):
+        calls = []
+
+        def get(_p, _q):
+            calls.append(1)
+            return None
+
+        with mock.patch.object(hs, "gbis_get", get):
+            self.assertEqual(hs.gbis_route_ids("66"), [])
+            self.assertEqual(hs.gbis_route_ids("66"), [])
+        self.assertEqual(len(calls), 2, "실패한 조회는 다음에 다시 물어야 한다")
+
+
 if __name__ == "__main__":
     unittest.main()
