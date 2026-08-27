@@ -1249,6 +1249,28 @@ def pick_leg_stops(stops, from_name, to_name):
             "alighting": uniq([a for _, a in pairs])}
 
 
+class BadCoordinate(ValueError):
+    """질의에 온 좌표가 숫자가 아니다."""
+
+
+def query_coordinate(query, lat_key, lon_key):
+    """질의에서 좌표 한 쌍을 읽는다. 없으면 `(None, None)`.
+
+    **둘 다 있어야 좌표다.** 하나만 오면 없는 것으로 친다 — 반쪽 좌표로
+    정류장을 고르면 엉뚱한 곳을 집는다.
+
+    **숫자가 아니면 터진다. 조용히 무시하지 않는다.** 무시하면 앱은 좌표를
+    보냈다고 믿는데 서버는 이름만으로 답하게 되고, 그 차이가 화면에 안 나타난다
+    — 이 저장소가 여러 번 당한 모양이다.
+    """
+    if not (query.get(lat_key) and query.get(lon_key)):
+        return None, None
+    try:
+        return float(query[lat_key][0]), float(query[lon_key][0])
+    except ValueError as error:
+        raise BadCoordinate(f"{lat_key}/{lon_key}") from error
+
+
 # 좌표로 후보를 좁힐 때 믿을 거리. `seoul_bus_arrival` 이 같은 판단에 쓰는 값이다 —
 # 저장된 승·하차점은 정류장 좌표에서 나온 값이라 수백 m 씩 벌어질 이유가 없다.
 # 실측(2026-08-27)은 5.0m · 32.8m · 2.1m 였다.
@@ -3140,17 +3162,10 @@ class Handler(BaseHTTPRequestHandler):
 
             # **좌표는 이제 선택이다.** 있으면 지금까지처럼 좌표열을 그리고, 없으면
             # 이름만으로 정류장을 찾는다. 옛 앱은 늘 보내므로 동작이 그대로다.
-            def coordinate(lat_key, lon_key):
-                if not (query.get(lat_key) and query.get(lon_key)):
-                    return None, None
-                try:
-                    return float(query[lat_key][0]), float(query[lon_key][0])
-                except ValueError:
-                    return "나쁜값", None
-
-            from_lat, from_lon = coordinate("fromLat", "fromLon")
-            to_lat, to_lon = coordinate("toLat", "toLon")
-            if from_lat == "나쁜값" or to_lat == "나쁜값":
+            try:
+                from_lat, from_lon = query_coordinate(query, "fromLat", "fromLon")
+                to_lat, to_lon = query_coordinate(query, "toLat", "toLon")
+            except BadCoordinate:
                 return self.reply(400, {"error": "좌표가 숫자가 아닙니다"})
 
             points, missing = [], []

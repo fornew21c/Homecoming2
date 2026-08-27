@@ -377,5 +377,38 @@ class NearestStopTests(unittest.TestCase):
         self.assertEqual(hs.nearest_stop([], 37.0, 127.0), [])
 
 
+class QueryCoordinateTests(unittest.TestCase):
+    """질의에서 좌표를 읽는 규칙. 핸들러가 이것만 쓴다."""
+
+    def query(self, text):
+        import urllib.parse
+        return urllib.parse.parse_qs(text)
+
+    def test_둘_다_있으면_숫자로_준다(self):
+        q = self.query("fromLat=37.673180&fromLon=126.787167")
+        self.assertEqual(hs.query_coordinate(q, "fromLat", "fromLon"),
+                         (37.673180, 126.787167))
+
+    def test_없으면_없는_것이다(self):
+        self.assertEqual(hs.query_coordinate({}, "toLat", "toLon"), (None, None))
+
+    def test_하나만_있으면_없는_것으로_친다(self):
+        # 반쪽 좌표로 정류장을 고르면 엉뚱한 곳을 집는다.
+        q = self.query("fromLat=37.67")
+        self.assertEqual(hs.query_coordinate(q, "fromLat", "fromLon"), (None, None))
+
+    def test_빈_값은_없는_것이다(self):
+        # `parse_qs` 가 빈 값을 아예 안 담는다.
+        q = self.query("fromLat=&fromLon=")
+        self.assertEqual(hs.query_coordinate(q, "fromLat", "fromLon"), (None, None))
+
+    def test_숫자가_아니면_터진다(self):
+        # **조용히 무시하면 안 된다.** 앱은 좌표를 보냈다고 믿는데 서버는
+        # 이름만으로 답하게 되고, 그 차이가 화면에 안 나타난다.
+        q = self.query("toLat=abc&toLon=126.8")
+        with self.assertRaises(hs.BadCoordinate):
+            hs.query_coordinate(q, "toLat", "toLon")
+
+
 if __name__ == "__main__":
     unittest.main()
