@@ -1683,6 +1683,51 @@ def seoul_search(text, limit=8):
             for n, la, lo, ars in found[:limit]]
 
 
+def gbis_stops_named(text, limit=8):
+    """경기 정류소를 이름으로. 좌표까지 함께 온다.
+
+    **서울 표에 없는 것이 여기 있다.** 예전에는 이름으로 찾을 길이 아예 없었다 —
+    TAGO 의 이름 조회는 도시코드를 요구하는데 그 코드를 좌표에서 얻을 수가
+    없었다. GBIS 는 이름만 주면 답한다(2026-08-27 개통).
+    """
+    body = gbis_get("busstationservice/v2/getBusStationListv2", {"keyword": text.strip()})
+    if not body:
+        return []                        # 실패도 결과 없음도 여기서는 같다
+    out = []
+    for row in body.get("busStationList") or []:
+        try:
+            out.append({"name": row["stationName"],
+                        "lat": float(row["y"]), "lon": float(row["x"]),
+                        "ars": str(row.get("mobileNo") or "").strip() or None})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out[:limit]
+
+
+def stop_search(text, limit=8):
+    """이름으로 정류장 찾기 — **서울과 경기를 함께 본다.**
+
+    **서울이 먼저다.** 구워 둔 표라 호출이 안 나가고 즉시 끝난다. 경기는 그
+    뒤에 붙는다.
+
+    이게 비면 편집기가 애플 지도로 떨어지는데, 애플 지도에는 버스정류장이
+    시설로 없어서 **근처 가게가 나온다** — `신촌로터리` 를 치면 종로김밥·
+    탐엔탐스가 온다. 2026-08-20 에는 그렇게 고른 GS25 가 가족 잠금화면에
+    `GS25까지 9분` 으로 떴다. 그래서 여기가 비지 않는 것이 중요하다.
+    """
+    needle = text.strip()
+    if len(needle) < 2:
+        return []                        # 한 글자면 전국이 나온다. 호출도 아깝다
+    found = seoul_search(needle, limit)
+    if len(found) >= limit:
+        return found
+    seen = {(s["name"], s.get("ars")) for s in found}
+    for stop in gbis_stops_named(needle, limit - len(found)):
+        if (stop["name"], stop.get("ars")) not in seen:
+            found.append(stop)
+    return found[:limit]
+
+
 def tago_stop_body(lat, lon, limit):
     """좌표 근접 정류소 조회의 응답 본문. 실패하면 None.
 
@@ -3266,8 +3311,8 @@ class Handler(BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
             text = (query.get("q", [""])[0] or "").strip()
             if text:
-                # 이름으로 찾기. 서울 자료만 이름·좌표를 함께 갖고 있다.
-                return self.reply(200, {"stops": seoul_search(text)})
+                # 이름으로 찾기. 서울은 구워 둔 표, 경기는 GBIS 다.
+                return self.reply(200, {"stops": stop_search(text)})
 
             try:
                 lat = float(query.get("lat", [""])[0])

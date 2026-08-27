@@ -492,5 +492,65 @@ class ArrivalBurstTests(unittest.TestCase):
         self.assertIsNone(value)
 
 
+class StopSearchTests(unittest.TestCase):
+    """이름으로 정류장 찾기 — **서울과 경기를 함께 본다.**
+
+    예전에는 서울 표만 봤다. `풍산역` 을 치면 0건이라 편집기가 애플 지도로
+    떨어졌고, 애플 지도에는 버스정류장이 시설로 없어서 근처 가게가 나왔다
+    (`신촌로터리` → 종로김밥 · 탐엔탐스). 2026-08-20 에는 그렇게 고른 GS25 가
+    가족 잠금화면에 `GS25까지 9분` 으로 떴다.
+    """
+
+    SEOUL = [
+        ["신촌로터리", 37.554051, 126.935683, "14205"],
+        ["신촌로터리", 37.555, 126.9357, "14204"],
+    ]
+
+    GYEONGGI = {"busStationList": [
+        {"stationId": 219000638, "mobileNo": " 20753", "stationName": "풍산역",
+         "y": "37.67315", "x": "126.7872167", "regionName": "고양"},
+        {"stationId": 227000210, "mobileNo": "28223", "stationName": "하남풍산역.꽃뫼마을1단지",
+         "y": "37.5528", "x": "127.2016167", "regionName": "하남"},
+    ]}
+
+    def search(self, text, gyeonggi=None):
+        patches = [
+            mock.patch.object(hs, "SEOUL_STOPS", self.SEOUL),
+            mock.patch.object(hs, "gbis_get", lambda _p, _q: gyeonggi),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            return hs.stop_search(text)
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_서울은_예전처럼_나온다(self):
+        got = self.search("신촌로터리", gyeonggi={})
+        self.assertEqual([s["ars"] for s in got], ["14205", "14204"])
+
+    def test_경기도_나온다(self):
+        got = self.search("풍산역", gyeonggi=self.GYEONGGI)
+        self.assertEqual([s["name"] for s in got],
+                         ["풍산역", "하남풍산역.꽃뫼마을1단지"])
+        self.assertEqual(got[0]["lat"], 37.67315)
+        self.assertEqual(got[0]["ars"], "20753")
+
+    def test_서울이_먼저다(self):
+        # 두 자료에 같은 이름이 있으면 서울 표가 앞이다 — 좌표를 직접 갖고 있고
+        # 호출이 안 나간다.
+        got = self.search("풍산역", gyeonggi=self.GYEONGGI)
+        self.assertEqual(len(got), 2)
+
+    def test_두_글자보다_짧으면_안_찾는다(self):
+        # 한 글자로 물으면 전국이 나온다. 호출도 아깝다.
+        self.assertEqual(self.search("풍", gyeonggi=self.GYEONGGI), [])
+
+    def test_경기_조회가_실패해도_서울은_준다(self):
+        got = self.search("신촌로터리", gyeonggi=None)
+        self.assertEqual([s["ars"] for s in got], ["14205", "14204"])
+
+
 if __name__ == "__main__":
     unittest.main()
