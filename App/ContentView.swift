@@ -230,6 +230,12 @@ struct ContentView: View {
     ///
     /// `statusCard` 와 섞지 않는다. 그쪽은 조종석이다(가족에게 보이는 이름,
     /// 추정 출처, 관측 보정, 전송 상태). 진단값과 공유되는 그림은 성격이 다르다.
+    /// 이번 귀가에서 **버스 도착 칩이 한 번이라도 떴는가.**
+    ///
+    /// 떴던 적이 있으면 값이 잠깐 비어도 계속 묻는다 — 안 그러면 스스로 못
+    /// 되찾는다. 세션이 바뀌면 타이머가 다시 시작되므로 그때 꺼진다.
+    @State private var sawBusArrival = false
+
     @ViewBuilder
     private var travelerStripCard: some View {
         if activity.isRunning,
@@ -256,18 +262,35 @@ struct ContentView: View {
             // 버스를 기다리는 그 시간이 정확히 그 상태다. 그래서 화면이 앞에
             // 있는 동안만 스스로 다시 묻는다.
             //
-            // **칩이 떠 있을 때만 돈다.** `busArrivalNo` 가 없으면 물어도
-            // 나올 것이 없고, 그러면 승차 15분 전이 아닌 내내 공공데이터를
-            // 태운다. 첫 값은 걸어가는 동안 위치 보고가 가져온다.
+            // **한 번이라도 칩이 떴으면 계속 묻는다.** 예전에는 `busArrivalNo`
+            // 가 있을 때만 돌았는데, 그러면 값이 잠깐 비는 순간 타이머가 스스로
+            // 꺼진다 — 그리고 값을 되찾으려면 물어봐야 하는데 물지 않으니
+            // 못 되찾는다.
+            //
+            // 2026-08-27 실귀가에서 그렇게 됐다. 18:34:09 에 자료가 값을 못
+            // 줬고, 그 뒤 5분 동안 `/bus-arrival` 호출이 **한 번도 없었다.**
+            // 사용자가 `↻` 를 눌러서야 돌아왔다. 버스를 기다리던 그 5분이다.
+            //
+            // 한 번도 안 뜬 구간(노선번호가 비었거나 승차 15분 전이 아니거나)
+            // 에서는 여전히 안 묻는다. 그게 원래 막으려던 것이다.
             //
             // 30초는 서버 캐시와 같은 주기다. 더 자주 불러도 같은 값이 온다.
-            .task(id: state.busArrivalNo) {
-                guard state.busArrivalNo != nil else { return }
+            .task(id: attributes.sessionID) {
+                // **세션마다 처음부터 센다.** 지난 귀가에서 떴다는 이유로 이번
+                // 귀가의 첫 구간부터 묻기 시작하면 안 된다.
+                //
+                // 화면에 들어올 때 이미 떠 있을 수도 있다(잠금화면에서 앱으로
+                // 넘어온 경우). `onChange` 는 바뀔 때만 오므로 여기서 한 번 본다.
+                sawBusArrival = state.busArrivalNo != nil
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(30))
                     guard !Task.isCancelled else { return }
+                    guard sawBusArrival else { continue }
                     await coordinator.refreshBusArrival()
                 }
+            }
+            .onChange(of: state.busArrivalNo) { _, no in
+                if no != nil { sawBusArrival = true }
             }
         }
     }

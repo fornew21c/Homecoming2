@@ -776,5 +776,55 @@ class TerminusLabelTests(unittest.TestCase):
         self.assertIsNone(hs.next_stop_name(route, "99999"))
 
 
+class ArrivalReasonTests(unittest.TestCase):
+    """**`없음` 의 이유를 가른다.**
+
+    2026-08-27 실귀가에서 18:34:09 에 `버스 999 도착 새로고침 → 없음` 이 찍혔고
+    칩이 사라졌다. 그런데 로그에 `없음` 이라고만 있어서 **자료가 빈 것인지 우리가
+    걸러낸 것인지 구분할 수가 없었다** — 이미 지난 차는 우리가 일부러 버린다.
+
+    셋을 가른다. 다음에 같은 일이 나면 로그가 말해 준다.
+    """
+
+    def rows(self, *triples):
+        return [{"routeno": no, "arrtime": sec, "arrprevstationcnt": left}
+                for no, sec, left in triples]
+
+    def ask(self, rows):
+        hs._arrival_none_reason = None
+        patches = [
+            mock.patch.object(hs, "arrival_stop", lambda _la, _lo, now=None: ("31100", "N1")),
+            mock.patch.object(hs, "arrival_rows_cached", lambda _c, _n, _a: rows),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            value = hs.bus_arrival(37.0, 127.0, "999")
+        finally:
+            for p in patches:
+                p.stop()
+        return value, hs._arrival_none_reason
+
+    def test_자료가_비면_그렇게_말한다(self):
+        value, why = self.ask([])
+        self.assertIsNone(value)
+        self.assertIn("자료가 비었다", why)
+
+    def test_그_노선이_안_오면_그렇게_말한다(self):
+        value, why = self.ask(self.rows(("81", 300, 2), ("96", 600, 5)))
+        self.assertIsNone(value)
+        self.assertIn("안 온다", why)
+
+    def test_지난_차뿐이면_그렇게_말한다(self):
+        value, why = self.ask(self.rows(("999", -30, 0)))
+        self.assertIsNone(value)
+        self.assertIn("지난 차", why)
+
+    def test_값이_있으면_이유가_없다(self):
+        value, why = self.ask(self.rows(("999", 300, 2)))
+        self.assertIsNotNone(value)
+        self.assertIsNone(why)
+
+
 if __name__ == "__main__":
     unittest.main()

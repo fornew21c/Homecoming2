@@ -1469,9 +1469,10 @@ def seoul_bus_arrival(lat, lon, route_no, now=None):
     """
     at = now or datetime.now(timezone.utc)
     want = str(route_no).strip()
+    found_stop = False
     ids = seoul_routes().get(want) or []
     if not ids:
-        return None
+        return arrival_none([], [], want, "서울 노선표")
 
     # `arsId` → 좌표. 서울 정류장 표에서 만든다.
     index = {stop[3]: (stop[1], stop[2]) for stop in SEOUL_STOPS if len(stop) > 3 and stop[3]}
@@ -1511,7 +1512,10 @@ def seoul_bus_arrival(lat, lon, route_no, now=None):
                 left = None
             coming.append((seconds, left if left is not None and left >= 0 else None))
         if not coming:
+            # 그 노선의 그 기둥은 찾았는데 시각이 없다. 막차가 끊겼거나 지난 차뿐이다.
+            found_stop = True
             continue
+        arrival_none_clear()
         coming.sort()
 
         value = {"no": want, "at": at + timedelta(seconds=coming[0][0]),
@@ -1520,7 +1524,10 @@ def seoul_bus_arrival(lat, lon, route_no, now=None):
             value["thenAt"] = at + timedelta(seconds=coming[1][0])
             value["thenStops"] = coming[1][1]
         return value
-    return None
+    # 여기까지 오면 값이 없다. 기둥은 찾았는데 시각이 없는 것과, 기둥 자체를
+    # 못 찾은 것(승차 좌표에서 500m 밖)을 가려 적는다.
+    return arrival_none([1] if found_stop else [], [1] if found_stop else [],
+                        want, "서울 승차 기둥")
 
 
 def seoul_leg_stops(route_no, from_name, to_name):
@@ -1574,6 +1581,45 @@ def leg_stops(route_no, from_name, to_name):
     return seoul_leg_stops(route_no, from_name, to_name)
 
 
+# 마지막으로 적은 "왜 값이 없나". 30초마다 같은 줄을 남기지 않으려고 든다.
+_arrival_none_reason = None
+
+
+def arrival_none_clear():
+    """값을 찾았으니 이유를 지운다. 다음에 또 비면 다시 말한다."""
+    global _arrival_none_reason
+    _arrival_none_reason = None
+
+
+def arrival_none(rows, mine, route_no, where):
+    """**왜 값이 없는지 가려 적는다.** 언제나 None 을 돌려준다.
+
+    2026-08-27 실귀가에서 18:34:09 에 `버스 999 도착 새로고침 → 없음` 이 찍혔고
+    칩이 사라졌다. 그런데 `없음` 이라고만 있어서 **자료가 빈 것인지 우리가
+    걸러낸 것인지 구분할 수가 없었다** — 이미 지난 차는 우리가 일부러 버린다.
+
+    셋을 가른다 —
+        자료가 비었다        정류장에 오는 차가 한 줄도 없다
+        그 노선이 안 온다     다른 노선만 온다. 기둥을 잘못 골랐을 수 있다
+        지난 차뿐이다        그 노선이 오긴 하는데 시각이 다 과거다
+
+    같은 이유는 한 번만 적는다. 30초마다 부르는 자리라서다.
+    """
+    global _arrival_none_reason
+    if not rows:
+        why = f"{where}에 오는 차가 한 줄도 없다 — 자료가 비었다"
+    elif not mine:
+        others = sorted({str(r.get("routeno") or "").strip() for r in rows} - {""})
+        why = (f"{where}에 {route_no}번이 안 온다 — 오는 것은 "
+               f"{' · '.join(others[:6]) or '알 수 없음'}")
+    else:
+        why = f"{route_no}번이 오긴 하는데 이미 지난 차뿐이다"
+    if why != _arrival_none_reason:
+        _arrival_none_reason = why
+        log(f"  버스 도착값 없음 — {why}")
+    return None
+
+
 def bus_arrival(lat, lon, route_no, now=None):
     """그 자리에서 탈 `route_no` 버스가 언제 오는가. 모르면 None.
 
@@ -1604,10 +1650,10 @@ def bus_arrival(lat, lon, route_no, now=None):
 
     # **오는 차를 다 모아 빠른 순으로 세운다.** 같은 노선이 여러 줄로 온다 —
     # 실측에서 999번이 293초·1158초 두 대였다(2026-08-26).
+    rows = arrival_rows_cached(city_code, node_id, at)
+    mine = [r for r in rows if str(r.get("routeno") or "").strip() == want]
     coming = []
-    for row in arrival_rows_cached(city_code, node_id, at):
-        if str(row.get("routeno") or "").strip() != want:
-            continue
+    for row in mine:
         try:
             seconds = int(row.get("arrtime"))
         except (TypeError, ValueError):
@@ -1618,7 +1664,8 @@ def bus_arrival(lat, lon, route_no, now=None):
             continue
         coming.append((seconds, row))
     if not coming:
-        return None
+        return arrival_none(rows, mine, want, "그 정류장")
+    arrival_none_clear()
     coming.sort(key=lambda pair: pair[0])
 
     seconds, row = coming[0]
