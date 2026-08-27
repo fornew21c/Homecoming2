@@ -472,7 +472,10 @@ private struct PlacePicker: View {
     private func stopContext(_ stop: BusStop) -> String? {
         var parts: [String] = []
         if let number = stop.number { parts.append("정류장 번호 \(number)") }
-        if let next = stop.nextStop { parts.append("다음 \(next)") }
+        if let next = stop.nextStop {
+            // 서버가 마지막 정류장에는 `종점` 을 보낸다. `다음 종점` 은 말이 안 된다.
+            parts.append(next == "종점" ? "종점" : "다음 \(next)")
+        }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

@@ -627,8 +627,9 @@ class NextStopLabelTests(unittest.TestCase):
         self.assertEqual(hs.next_stop_name(self.ROUTE, "20753"), "애니골입구")
         self.assertEqual(hs.next_stop_name(self.ROUTE, "58271"), "밤가시7.8단지.광림교회")
 
-    def test_마지막_정류장은_다음이_없다(self):
-        self.assertIsNone(hs.next_stop_name(self.ROUTE, "58261"))
+    def test_마지막_정류장은_종점이라고_말한다(self):
+        # 빈칸으로 두면 "왜 이건 정보가 없지" 로 읽힌다. 종점인 것이 정보다.
+        self.assertEqual(hs.next_stop_name(self.ROUTE, "58261"), "종점")
 
     def test_그_기둥이_없으면_모른다(self):
         self.assertIsNone(hs.next_stop_name(self.ROUTE, "99999"))
@@ -748,6 +749,31 @@ class BothRegionsTests(unittest.TestCase):
             for p in patches:
                 p.stop()
         self.assertEqual(stops[0].get("next"), "서일대입구")
+
+
+class TerminusLabelTests(unittest.TestCase):
+    """**종점에는 `종점` 이라고 적는다.**
+
+    2026-08-27 실측 — 좁혀진 둘 중 하나가 노선의 마지막 정류장인 경우가 흔하다.
+    163 은 09103(staOrd 2)과 09104(staOrd 112, 마지막)이고, 271 은 07195(1)과
+    07196(123, 마지막)이다. 마지막에는 다음 정류장이 없다.
+
+    빈칸으로 두면 "왜 이건 정보가 없지" 로 읽힌다. **종점이라는 것 자체가
+    고르는 데 쓰이는 정보다** — 거기서 타는 사람은 없다.
+    """
+
+    def test_종점이_표시된다(self):
+        route = [
+            {"id": "a", "no": "09103", "name": "우이동도선사입구", "lat": 0, "lon": 0, "seq": 2},
+            {"id": "b", "no": "09105", "name": "강북씨앤지", "lat": 0, "lon": 0, "seq": 3},
+            {"id": "c", "no": "09104", "name": "우이동성원아파트", "lat": 0, "lon": 0, "seq": 112},
+        ]
+        self.assertEqual(hs.next_stop_name(route, "09103"), "강북씨앤지")
+        self.assertEqual(hs.next_stop_name(route, "09104"), "종점")
+
+    def test_그_기둥이_없으면_여전히_모른다(self):
+        route = [{"id": "a", "no": "1", "name": "x", "lat": 0, "lon": 0, "seq": 1}]
+        self.assertIsNone(hs.next_stop_name(route, "99999"))
 
 
 if __name__ == "__main__":

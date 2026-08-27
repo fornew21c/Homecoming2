@@ -1229,7 +1229,7 @@ def gbis_route_stops(route_id):
 
 
 def next_stop_name(stops, ars):
-    """그 기둥에서 차가 **다음에 서는 정류장**. 모르면 None.
+    """그 기둥에서 차가 **다음에 서는 정류장**. 마지막이면 `"종점"`, 모르면 None.
 
     **길 양쪽 기둥을 사람이 가리는 데 쓴다.** 노선번호로 좁혀도 상·하행 둘이
     남는다(풍산역 20753 · 58271). 귀가하는 사람은 자기가 가는 방향에 무엇이
@@ -1252,7 +1252,13 @@ def next_stop_name(stops, ars):
     order = sorted(stops, key=lambda s: s["seq"])
     for index, stop in enumerate(order):
         if stop.get("no") == str(ars):
-            return order[index + 1]["name"] if index + 1 < len(order) else None
+            if index + 1 < len(order):
+                return order[index + 1]["name"]
+            # **빈칸으로 두면 "왜 이건 정보가 없지" 로 읽힌다.** 종점이라는 것
+            # 자체가 고르는 데 쓰이는 정보다 — 거기서 타는 사람은 없다.
+            # 좁혀진 둘 중 하나가 마지막인 경우가 흔하다(163 의 09104 staOrd 112,
+            # 271 의 07196 staOrd 123 — 2026-08-27 실측).
+            return "종점"
     return None
 
 
