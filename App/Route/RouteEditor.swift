@@ -443,25 +443,29 @@ private struct PlacePicker: View {
         stopLookup?.cancel()
         guard query.trimmingCharacters(in: .whitespaces).count >= 2 else {
             stops = []
+            isLookingUp = false
             return
         }
+        isLookingUp = true
         stopLookup = Task {
-            // 검색과 같은 박자로 기다린다. 한 글자마다 서버를 부를 이유가 없다.
+            // 한 글자마다 서버를 부를 이유가 없다.
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
             let found = await store.stopsNamed(query)
             guard !Task.isCancelled else { return }
             stops = found
+            isLookingUp = false
         }
     }
 
-    @State private var search = PlaceSearch()
     @State private var text = ""
     @State private var isOpen = false
     @State private var isMapping = false
     /// 공공데이터가 아는 정류장. 애플 지도보다 **먼저** 보여 준다.
     @State private var stops: [BusStop] = []
     @State private var stopLookup: Task<Void, Never>?
+    /// 조회가 도는 중. 예전에는 애플 지도가 이 표시를 들고 있었다.
+    @State private var isLookingUp = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -488,18 +492,27 @@ private struct PlacePicker: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.08)))
                     .foregroundStyle(.white)
                     .onChange(of: text) { _, new in
-                        search.near = near
-                        search.search(new)
                         findStops(new)
                     }
 
-                if search.isSearching {
+                if isLookingUp {
                     ProgressView().controlSize(.small).tint(.white.opacity(0.4))
                 }
 
-                // **정류장이 먼저다.** 애플 지도에는 버스정류장이 시설로 없어서
-                // "환승로터리" 를 치면 근처 편의점이 나온다. 공공데이터는 그
-                // 이름을 정확히 알고 좌표도 함께 준다.
+                // **공공데이터 정류장만 보여 준다.**
+                //
+                // 예전에는 애플 지도(`MKLocalSearch`)도 같이 두드려 그 결과를
+                // 아래에 붙였다. 애플 지도에는 버스정류장이 **시설로 없어서**
+                // 이름을 치면 근처 가게가 온다 — `신촌로터리` 를 치면 종로김밥·
+                // 탐엔탐스·한솥도시락이 나왔다. 2026-08-20 에는 그렇게 고른
+                // GS25 가 가족 잠금화면에 `GS25까지 9분` 으로 떴다.
+                //
+                // 정류장을 위에 두는 것으로 눌러 왔는데, **경기 정류장이 이름으로
+                // 안 나오던 동안에는 그 방어가 통하지 않았다** — 위가 늘 비어서
+                // 애플 지도밖에 고를 게 없었다. 서버가 경기까지 찾게 된 지금
+                // (2026-08-27) 정류장 목록만으로 충분하다.
+                //
+                // 정류장이 아닌 자리(회사·건물)는 아래 `지도에서 찍기` 로 간다.
                 ForEach(stops) { stop in
                     Button {
                         onPick(PlaceSearch.Hit(name: stop.name, context: stopContext(stop),
@@ -529,38 +542,17 @@ private struct PlacePicker: View {
                     .buttonStyle(.plain)
                 }
 
-                ForEach(search.hits) { hit in
-                    Button {
-                        onPick(hit)
-                        text = ""
-                        isOpen = false
-                    } label: {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(hit.name)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.white)
-                            if let context = hit.context {
-                                Text(context)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.white.opacity(0.4))
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 10)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if let message = search.lastError, !search.isSearching {
-                    Text(message)
+                if stops.isEmpty, !isLookingUp,
+                   text.trimmingCharacters(in: .whitespaces).count >= 2 {
+                    Text("그 이름의 정류장이 없습니다. 아래에서 직접 찍으세요.")
                         .font(.system(size: 11))
-                        .foregroundStyle(.orange.opacity(0.8))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.horizontal, 10)
                 }
 
-                // **검색으로는 못 찾는 자리가 늘 있다.** 버스정류장은 애플 지도에
-                // 시설로 없어서 "환승로터리" 를 치면 근처 편의점이 나온다. 그 자리가
-                // 어딘지는 쓰는 사람이 아니까, 직접 찍을 길을 항상 열어 둔다.
+                // **검색으로는 못 찾는 자리가 늘 있다.** 회사·건물처럼 정류장이
+                // 아닌 목적지가 그렇다. 그 자리가 어딘지는 쓰는 사람이 아니까,
+                // 직접 찍을 길을 항상 열어 둔다.
                 Button { isMapping = true } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "mappin.and.ellipse")
