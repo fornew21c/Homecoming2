@@ -552,5 +552,54 @@ class StopSearchTests(unittest.TestCase):
         self.assertEqual([s["ars"] for s in got], ["14205", "14204"])
 
 
+class StopSearchByRouteTests(unittest.TestCase):
+    """**노선번호를 알면 그 노선이 서는 기둥만 준다.**
+
+    풍산역은 기둥이 넷이고 이름이 다 같다. 화면에 `정류장 번호 20753` 이라고
+    적어 줘도, 그 번호는 기둥에 가서 봐야 아는 값이다 — 경로를 만드는 건 대개
+    집이나 회사다. 노선번호를 알면 자료가 정해 준다.
+    """
+
+    STOPS = [
+        {"name": "풍산역", "lat": 37.67385, "lon": 126.78603, "ars": "20573"},
+        {"name": "풍산역", "lat": 37.67315, "lon": 126.7872167, "ars": "20753"},
+        {"name": "풍산역", "lat": 37.6734167, "lon": 126.7872333, "ars": "58271"},
+        {"name": "풍산역2번출구", "lat": 37.6726667, "lon": 126.7870833, "ars": "20486"},
+    ]
+
+    # 999 가 서는 기둥은 20753 과 58271 이다(2026-08-27 실측).
+    ON_ROUTE = [
+        {"id": "GGB219000638", "no": "20753", "name": "풍산역",
+         "lat": 37.67315, "lon": 126.7872167, "seq": 13},
+        {"id": "GGB219001069", "no": "58271", "name": "풍산역",
+         "lat": 37.6734167, "lon": 126.7872333, "seq": 78},
+    ]
+
+    def narrow(self, route_no, on_route):
+        with mock.patch.object(hs, "route_stop_numbers",
+                               lambda _no: {s["no"] for s in on_route}):
+            return hs.narrow_by_route(self.STOPS, route_no)
+
+    def test_그_노선이_서는_기둥만_남는다(self):
+        got = self.narrow("999", self.ON_ROUTE)
+        self.assertEqual([s["ars"] for s in got], ["20753", "58271"])
+
+    def test_노선번호가_없으면_그대로_준다(self):
+        self.assertEqual(hs.narrow_by_route(self.STOPS, None), self.STOPS)
+        self.assertEqual(hs.narrow_by_route(self.STOPS, ""), self.STOPS)
+
+    def test_그_노선을_못_찾으면_그대로_준다(self):
+        # **좁힐 수 없으면 안 좁힌다.** 빈 목록을 주면 사용자가 아무것도 못 고른다.
+        got = self.narrow("없는번호", [])
+        self.assertEqual(got, self.STOPS)
+
+    def test_하나도_안_맞으면_그대로_준다(self):
+        # 이름을 잘못 쳤거나 다른 동네다. 빈 화면보다 낫다.
+        other = [{"id": "x", "no": "99999", "name": "딴곳",
+                  "lat": 0, "lon": 0, "seq": 1}]
+        got = self.narrow("999", other)
+        self.assertEqual(got, self.STOPS)
+
+
 if __name__ == "__main__":
     unittest.main()

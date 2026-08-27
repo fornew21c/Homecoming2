@@ -1704,6 +1704,52 @@ def gbis_stops_named(text, limit=8):
     return out[:limit]
 
 
+def route_stop_numbers(route_no):
+    """그 노선이 서는 정류장의 **기둥번호** 집합. 못 찾으면 빈 집합.
+
+    경기는 GBIS 경유정류소(`mobileNo`), 서울은 TOPIS 도착정보의 `arsId` 다.
+    둘 다 사람이 기둥에서 읽는 번호라 같은 자로 견줄 수 있다.
+
+    **서울은 정류소별 경유노선을 못 묻는다**(`stationinfo/*` 가 401, 2026-08-27
+    재확인). 그래서 반대로 간다 — 노선 하나를 불러 그 정류장 목록을 받는다.
+    """
+    want = str(route_no or "").strip()
+    if not want:
+        return set()
+    numbers = set()
+    for route_id in gbis_route_ids(want):
+        numbers |= {s["no"] for s in gbis_route_stops(route_id) if s.get("no")}
+    if numbers:
+        return numbers
+    at = datetime.now(timezone.utc)
+    for route_id in seoul_routes().get(want) or []:
+        for item in seoul_arrival_items_cached(route_id, at):
+            ars = _tag(item, "arsId")
+            if ars:
+                numbers.add(ars)
+    return numbers
+
+
+def narrow_by_route(stops, route_no):
+    """찾은 정류장 중 그 노선이 서는 것만. **좁힐 수 없으면 안 좁힌다.**
+
+    풍산역은 기둥이 넷이고 이름이 다 같다. `정류장 번호 20753` 이라고 적어 줘도
+    그 번호는 기둥에 가서 봐야 아는 값이다 — 경로를 만드는 건 대개 집이나
+    회사다. 노선번호를 알면 자료가 정해 준다.
+
+    노선을 못 찾거나 하나도 안 맞으면 원래 목록을 그대로 준다. **빈 목록을
+    주면 사용자가 아무것도 못 고른다** — 이름을 잘못 쳤을 수도 있고 다른
+    동네일 수도 있다.
+    """
+    if not str(route_no or "").strip():
+        return stops
+    numbers = route_stop_numbers(route_no)
+    if not numbers:
+        return stops
+    kept = [s for s in stops if s.get("ars") in numbers]
+    return kept or stops
+
+
 def stop_search(text, limit=8):
     """이름으로 정류장 찾기 — **서울과 경기를 함께 본다.**
 
@@ -3312,7 +3358,17 @@ class Handler(BaseHTTPRequestHandler):
             text = (query.get("q", [""])[0] or "").strip()
             if text:
                 # 이름으로 찾기. 서울은 구워 둔 표, 경기는 GBIS 다.
-                return self.reply(200, {"stops": stop_search(text)})
+                #
+                # **노선번호를 주면 그 노선이 서는 기둥만 준다.** 같은 이름의
+                # 기둥이 넷인데 번호는 거기 가야 읽을 수 있다(풍산역).
+                found = stop_search(text)
+                route_no = (query.get("route", [""])[0] or "").strip()
+                if route_no:
+                    narrowed = narrow_by_route(found, route_no)
+                    log(f"  정류장 '{text}' + {route_no}번 → "
+                        f"{len(found)}건 중 {len(narrowed)}건")
+                    found = narrowed
+                return self.reply(200, {"stops": found})
 
             try:
                 lat = float(query.get("lat", [""])[0])
