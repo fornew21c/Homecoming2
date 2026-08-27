@@ -5,8 +5,11 @@
 
 ## 먼저 읽을 것
 
-- **[`docs/HANDOFF-2026-08-27.md`](docs/HANDOFF-2026-08-27.md)** — **여기서
-  시작한다.** 서울 버스가 열렸다, 서 있는 동안의 자동 갱신, GitHub 공개,
+- **[`docs/HANDOFF-2026-08-27-stops.md`](docs/HANDOFF-2026-08-27-stops.md)** —
+  **여기서 시작한다.** 경기도 GBIS 개통, 이름만으로 정류장 정하기,
+  `곧 도착`·heartbeat 버그, 시험이 진짜 DB 를 지우던 것
+- **[`docs/HANDOFF-2026-08-27.md`](docs/HANDOFF-2026-08-27.md)** — 그날 오전.
+  서울 버스가 열렸다, 서 있는 동안의 자동 갱신, GitHub 공개,
   그리고 `rm -rf Server` 사고
 - **[`docs/HANDOFF-2026-08-26-bus.md`](docs/HANDOFF-2026-08-26-bus.md)** —
   버스 실시간 도착을 붙인 기록. 시험이 통과하는데 화면이 비던 두 사건
@@ -69,11 +72,12 @@
 
 ```bash
 python3 Tools/verify-progress-sync.py          # 카드 vs 지도, 실제 경로 28.4km
-cd Server && python3 -m unittest discover      # 서버 시험 107개
+python3 -m unittest discover -s Server        # 서버 시험 151개
 ```
 
 ```bash
 source Server/.env.local                       # 공공데이터 키
 python3 Server/homecoming_server.py --port 8811
-railway up --detach --service homecoming2      # 배포
+railway up --detach --service homecoming2      # 배포. **저장소 루트에서 쏜다** —
+                                               # `railway up` 은 지금 디렉터리를 올린다
 ```
