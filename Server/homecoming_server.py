@@ -1757,18 +1757,19 @@ def route_stop_lists(route_no):
 
     같은 번호가 여러 노선일 수 있으므로 목록을 여러 개 낸다. 부르는 쪽이
     이름이 맞는 것을 골라 쓴다.
+
+    **한쪽에서 찾았다고 다른 쪽을 안 보면 안 된다.** `271` 이 경기(이천시)에도
+    있고 서울에도 있다(2026-08-27 실측). 경기에서 먼저 찾고 멈추면 서울 271 의
+    정류장 목록을 못 받아, 서울 정류장에 다음 정류장이 안 붙었다. 번호만으로는
+    지역이 안 정해진다.
     """
     want = str(route_no or "").strip()
     if not want:
         return
-    found = False
     for route_id in gbis_route_ids(want):
         stops = gbis_route_stops(route_id)
         if stops:
-            found = True
             yield stops
-    if found:
-        return
     at = datetime.now(timezone.utc)
     index = {row[3]: row for row in SEOUL_STOPS if len(row) > 3 and row[3]}
     for route_id in seoul_routes().get(want) or []:

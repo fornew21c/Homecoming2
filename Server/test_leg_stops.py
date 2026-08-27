@@ -686,5 +686,69 @@ class GbisSingleRowTests(unittest.TestCase):
             hs._gbis_routes.clear()
 
 
+class BothRegionsTests(unittest.TestCase):
+    """**같은 번호가 두 지역에 있다.** 한쪽에서 찾았다고 다른 쪽을 안 보면 안 된다.
+
+    2026-08-27 실측 — `271` 이 경기(이천시)에도 있고 서울에도 있다. 경기에서
+    먼저 찾고 멈추면 서울 271 의 정류장 목록을 못 받아, `용마문화복지센터.
+    서일대후문`(서울) 에 다음 정류장이 안 붙었다.
+
+    `999` 도 고양·수원 둘이고 `163` 은 서울에만 있다. 번호만으로는 지역이
+    안 정해진다 — **둘 다 내고 부르는 쪽이 이름으로 고른다.**
+    """
+
+    GYEONGGI = [{"id": "GGB1", "no": "11111", "name": "이천어딘가",
+                 "lat": 0, "lon": 0, "seq": 1},
+                {"id": "GGB2", "no": "11112", "name": "이천다음",
+                 "lat": 0, "lon": 0, "seq": 2}]
+    SEOUL_TABLE = [["용마문화복지센터.서일대후문", 37.5, 127.0, "24001"],
+                   ["서일대입구", 37.51, 127.01, "24002"]]
+
+    def lists(self):
+        patches = [
+            mock.patch.object(hs, "gbis_route_ids", lambda _no: ["233000019"]),
+            mock.patch.object(hs, "gbis_route_stops", lambda _rid: self.GYEONGGI),
+            mock.patch.object(hs, "SEOUL_STOPS", self.SEOUL_TABLE),
+            mock.patch.object(hs, "seoul_routes", lambda: {"271": ["100100100"]}),
+            mock.patch.object(hs, "seoul_arrival_items_cached", lambda _r, _a: [
+                "<arsId>24001</arsId><staOrd>5</staOrd>",
+                "<arsId>24002</arsId><staOrd>6</staOrd>"]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            return list(hs.route_stop_lists("271"))
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_두_지역_목록을_다_낸다(self):
+        got = self.lists()
+        self.assertEqual(len(got), 2, "경기에서 찾았다고 서울을 빼면 안 된다")
+        self.assertEqual([s["no"] for s in got[0]], ["11111", "11112"])
+        self.assertEqual([s["no"] for s in got[1]], ["24001", "24002"])
+
+    def test_서울_정류장에도_다음이_붙는다(self):
+        stops = [{"name": "용마문화복지센터.서일대후문", "lat": 37.5, "lon": 127.0,
+                  "ars": "24001"}]
+        patches = [
+            mock.patch.object(hs, "gbis_route_ids", lambda _no: ["233000019"]),
+            mock.patch.object(hs, "gbis_route_stops", lambda _rid: self.GYEONGGI),
+            mock.patch.object(hs, "SEOUL_STOPS", self.SEOUL_TABLE),
+            mock.patch.object(hs, "seoul_routes", lambda: {"271": ["100100100"]}),
+            mock.patch.object(hs, "seoul_arrival_items_cached", lambda _r, _a: [
+                "<arsId>24001</arsId><staOrd>5</staOrd>",
+                "<arsId>24002</arsId><staOrd>6</staOrd>"]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            hs.label_next_stops(stops, "271")
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertEqual(stops[0].get("next"), "서일대입구")
+
+
 if __name__ == "__main__":
     unittest.main()
