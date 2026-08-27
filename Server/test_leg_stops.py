@@ -151,5 +151,51 @@ class GbisRouteStopsTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class StopsNamedTests(unittest.TestCase):
+
+    STOPS = [
+        {"id": "a", "no": "20572", "name": "저동중고교", "lat": 0, "lon": 0, "seq": 11},
+        {"id": "b", "no": "20753", "name": "풍산역", "lat": 0, "lon": 0, "seq": 13},
+        {"id": "c", "no": "20486", "name": "풍산역2번출구", "lat": 0, "lon": 0, "seq": 14},
+        {"id": "d", "no": "20795", "name": "위시티1.3단지", "lat": 0, "lon": 0, "seq": 20},
+    ]
+
+    def test_완전일치가_하나면_그것만(self):
+        got = hs.stops_named(self.STOPS, "풍산역")
+        self.assertEqual([s["no"] for s in got], ["20753"])
+
+    def test_쉼표와_점을_같게_본다(self):
+        # 저장된 이름은 `위시티1,3단지`, 자료는 `위시티1.3단지` 다(2026-08-27).
+        got = hs.stops_named(self.STOPS, "위시티1,3단지")
+        self.assertEqual([s["no"] for s in got], ["20795"])
+
+    def test_접미어가_붙어도_찾는다(self):
+        # 사용자가 `풍산역 버스정류장` 이라고 적는다. 자료는 `풍산역` 이다.
+        got = hs.stops_named(self.STOPS, "풍산역 버스정류장")
+        self.assertEqual([s["no"] for s in got], ["20753"])
+
+    def test_여럿이면_줄이지_않고_다_준다(self):
+        got = hs.stops_named(self.STOPS, "풍산")
+        self.assertEqual(sorted(s["no"] for s in got), ["20486", "20753"])
+
+    def test_없으면_빈_목록이다(self):
+        self.assertEqual(hs.stops_named(self.STOPS, "서울역"), [])
+
+    def test_빈_이름은_빈_목록이다(self):
+        self.assertEqual(hs.stops_named(self.STOPS, ""), [])
+        self.assertEqual(hs.stops_named(self.STOPS, None), [])
+
+
+class NameKeyTests(unittest.TestCase):
+
+    def test_점_쉼표_공백_가운뎃점을_지운다(self):
+        self.assertEqual(hs.name_key("위시티1, 3단지"), "위시티13단지")
+        self.assertEqual(hs.name_key("밤가시7.8단지·광림교회"), "밤가시78단지광림교회")
+
+    def test_n_eq_는_그대로_동작한다(self):
+        self.assertTrue(hs.n_eq("아파트 단지", "아파트단지"))
+        self.assertFalse(hs.n_eq("풍산역", "마두역"))
+
+
 if __name__ == "__main__":
     unittest.main()

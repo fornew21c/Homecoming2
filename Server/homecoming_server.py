@@ -1196,6 +1196,31 @@ def gbis_route_stops(route_id):
     return stops
 
 
+def stops_named(stops, name):
+    """이름으로 정류소 후보를 고른다. 못 찾으면 빈 목록.
+
+    **하나로 줄이지 않는다.** 완전일치가 정확히 하나면 결과도 하나가 되고,
+    그때만 부르는 쪽이 확정으로 쓴다. 그 밖에는 후보를 그대로 준다.
+
+    줄이면 안 되는 이유 — 이름이 세 갈래다. 사용자가 적은 것(`풍산역
+    버스정류장`), 자료의 것(`풍산역`), 길찾기 앱의 것. 지금 코드에는 이름
+    매칭이 실패하면 **좌표 근처 정류장으로 폴백**하는 안전망이 있는데
+    (`bus_leg_waypoints`), 좌표를 안 받는 길에는 그 안전망이 없다. 여기서
+    억지로 하나를 고르면 그게 곧 조용히 틀린 값이 된다.
+
+    `name_key` 는 이 아래(`n_eq` 옆)에 있다. 파이썬은 부를 때 찾으므로
+    문제가 없고, 이 파일이 이미 그렇게 되어 있다.
+    """
+    want = name_key(name)
+    if not want:
+        return []
+    exact = [stop for stop in stops if name_key(stop["name"]) == want]
+    if exact:
+        return exact
+    return [stop for stop in stops
+            if want in name_key(stop["name"]) or name_key(stop["name"]) in want]
+
+
 # --- 서울 버스 실시간 도착 --------------------------------------------------
 #
 # **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을
@@ -1395,14 +1420,20 @@ def bus_arrival(lat, lon, route_no, now=None):
     return value
 
 
-def n_eq(a, b):
-    """정류장 이름 비교. 표기 차이를 흡수한다.
+def name_key(name):
+    """정류장 이름 비교용 열쇠. 점·쉼표·공백·가운뎃점을 지운다.
 
     같은 정류장을 자료마다 다르게 적는다 — `아파트단지` 와 `아파트단지`,
-    `환승로터리` 와 `환승로터리`. 점·쉼표·공백을 지우고 견준다.
+    `환승로터리` 와 `환승로터리`. 그리고 사용자가 적은 `위시티1,3단지` 가
+    자료에서는 `위시티1.3단지` 다 — **쉼표로 그대로 물으면 결과가 0건이다**
+    (2026-08-27 실측).
     """
-    trans = str.maketrans("", "", " .,·")
-    return (a or "").translate(trans) == (b or "").translate(trans)
+    return (name or "").translate(str.maketrans("", "", " .,·"))
+
+
+def n_eq(a, b):
+    """정류장 이름 비교. 표기 차이를 흡수한다."""
+    return name_key(a) == name_key(b)
 
 
 def outbound_tls():
