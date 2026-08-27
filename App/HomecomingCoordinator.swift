@@ -141,6 +141,18 @@ final class HomecomingCoordinator {
     /// 노선도의 "N분 전 확인" 문턱(3분)보다 짧아야 뜻이 있다. 2분이면 왕복 지연을
     /// 감안해도 문턱에 안 닿는다. 근거는 `startHeartbeat()` 주석에 있다.
     private static let heartbeatSeconds: TimeInterval = 120
+
+    /// heartbeat 이 "방금 보고했다" 로 보고 거를 기준. **자는 시간과 같은 값을
+    /// 쓰면 안 된다.**
+    ///
+    /// 120초 자고 일어나 "마지막 보고가 120초보다 오래됐나" 를 물으면 119.x초로
+    /// 읽힌다 — 재는 시작점(보고가 **끝난** 시각)이 타이머 시작보다 뒤라서다.
+    /// 그래서 첫 발화가 매번 걸러지고 **실효 간격이 4분**이 된다.
+    ///
+    /// 2026-08-27 에 실제로 그랬다. 12:49:07 시작, 12:51 발화가 건너뛰어지고
+    /// 12:53:08 에야 첫 제자리 보고가 나갔다. 그 4분 동안 버스 도착 칩이 비어
+    /// 있었고, 위 주석이 요구한 "3분 문턱보다 짧게" 도 깨져 있었다.
+    private static let heartbeatSkipSeconds: TimeInterval = heartbeatSeconds / 2
     private static let safetyModeKey = "homecoming.safetyMode"
     private static let plannedMinutesKey = "homecoming.plannedMinutes"
 
@@ -705,7 +717,7 @@ final class HomecomingCoordinator {
     private func beat() async {
         guard let home, let location = tracker.lastLocation else { return }
         if let last = lastReportedAt,
-           Date().timeIntervalSince(last) < Self.heartbeatSeconds { return }
+           Date().timeIntervalSince(last) < Self.heartbeatSkipSeconds { return }
         HomecomingLog.location.notice("heartbeat — 제자리 보고")
         await report(location, home: home, force: true)
     }
