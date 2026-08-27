@@ -1450,6 +1450,18 @@ def seoul_leg_stops(route_no, from_name, to_name):
     return empty
 
 
+def leg_stops(route_no, from_name, to_name):
+    """버스 구간의 승차·하차 정류장 — 경기를 먼저 보고, 없으면 서울.
+
+    `bus_arrival` 이 이미 같은 순서로 넘긴다(TAGO 에서 못 찾으면 TOPIS).
+    같은 순서를 쓰면 두 자리가 어긋나지 않는다.
+    """
+    picked = bus_leg_stops(route_no, from_name, to_name)
+    if picked["boarding"] or picked["alighting"]:
+        return picked
+    return seoul_leg_stops(route_no, from_name, to_name)
+
+
 def bus_arrival(lat, lon, route_no, now=None):
     """그 자리에서 탈 `route_no` 버스가 언제 오는가. 모르면 None.
 
@@ -3099,19 +3111,32 @@ class Handler(BaseHTTPRequestHandler):
             route_no = (query.get("no", [""])[0] or "").strip()
             to_name = (query.get("to", [""])[0] or "").strip()
             from_name = (query.get("from", [""])[0] or "").strip() or None
-            try:
-                from_lat = float(query.get("fromLat", [""])[0])
-                from_lon = float(query.get("fromLon", [""])[0])
-            except ValueError:
-                return self.reply(400, {"error": "fromLat/fromLon 이 필요합니다"})
             if not route_no or not to_name:
                 return self.reply(400, {"error": "no/to 가 필요합니다"})
-            points, missing = bus_leg_waypoints(route_no, from_lat, from_lon,
-                                                to_name, from_name)
+
+            # **좌표는 이제 선택이다.** 있으면 지금까지처럼 좌표열을 그리고, 없으면
+            # 이름만으로 정류장을 찾는다. 옛 앱은 늘 보내므로 동작이 그대로다.
+            from_lat = from_lon = None
+            if query.get("fromLat") and query.get("fromLon"):
+                try:
+                    from_lat = float(query["fromLat"][0])
+                    from_lon = float(query["fromLon"][0])
+                except ValueError:
+                    return self.reply(400, {"error": "fromLat/fromLon 이 숫자가 아닙니다"})
+
+            points, missing = [], []
+            if from_lat is not None:
+                points, missing = bus_leg_waypoints(route_no, from_lat, from_lon,
+                                                    to_name, from_name)
+            picked = leg_stops(route_no, from_name, to_name)
             note = f" · 좌표 못 찾음 {missing}" if missing else ""
             log(f"  버스 {route_no} {from_name or '?'} → {to_name}: "
-                f"경유 정류장 {len(points)}개{note}")
-            return self.reply(200, {"points": points, "missing": missing})
+                f"경유 정류장 {len(points)}개{note} · "
+                f"승차 후보 {len(picked['boarding'])}개 "
+                f"하차 후보 {len(picked['alighting'])}개")
+            return self.reply(200, {"points": points, "missing": missing,
+                                    "boarding": picked["boarding"],
+                                    "alighting": picked["alighting"]})
 
         # 지하철 구간의 경유 역. `/bus/leg` 와 같은 자리, 같은 계약이다 —
         # 빈 결과는 실패가 아니고, 앱은 그때 두 역 직선으로 그리며 그 사실을 화면에 적는다.

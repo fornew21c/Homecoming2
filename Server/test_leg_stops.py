@@ -320,5 +320,27 @@ class SeoulLegStopsTests(unittest.TestCase):
         self.assertEqual(got, {"boarding": [], "alighting": []})
 
 
+class BusLegResolveTests(unittest.TestCase):
+    """핸들러가 부르는 합성 함수. 경기를 먼저 보고 없으면 서울로 넘어간다."""
+
+    def test_경기에서_찾으면_그것을_쓴다(self):
+        gyeonggi = {"boarding": [stop("20753", "풍산역", 13)], "alighting": []}
+        with mock.patch.object(hs, "bus_leg_stops", lambda *_a: gyeonggi), \
+             mock.patch.object(hs, "seoul_leg_stops", lambda *_a: 1 / 0):
+            got = hs.leg_stops("999", "풍산역", "위시티1.3단지")
+        self.assertEqual(got, gyeonggi)
+
+    def test_경기에_없으면_서울로_넘어간다(self):
+        empty = {"boarding": [], "alighting": []}
+        seoul = {"boarding": [{"id": "19003", "no": "19003",
+                               "name": "국회의사당역.KB국민은행",
+                               "lat": 37.5, "lon": 126.9, "seq": 5}],
+                 "alighting": []}
+        with mock.patch.object(hs, "bus_leg_stops", lambda *_a: empty), \
+             mock.patch.object(hs, "seoul_leg_stops", lambda *_a: seoul):
+            got = hs.leg_stops("163", "국회의사당역.KB국민은행", "신촌로터리")
+        self.assertEqual(got, seoul)
+
+
 if __name__ == "__main__":
     unittest.main()
