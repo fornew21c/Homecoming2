@@ -1210,32 +1210,32 @@ def gbis_route_stops(route_id):
     return stops
 
 
-def route_direction(stops, ars):
-    """그 기둥에 서는 차가 **어느 쪽으로 가는가**. 모르면 None.
-
-    회차점(`turnYn=Y`) 앞이면 회차점 쪽, 뒤면 종점 쪽이다. 999 실측
-    (2026-08-27) — 92개, seq 1 대화역(중) 출발 · seq 45 신원중학교 회차 ·
-    seq 92 대화역(중) 종점.
-
-        20753  seq 13  ≤ 45  → 신원중학교 방면
-        58271  seq 78  >  45 → 대화역(중) 방면
-
-    경유노선 조회가 따로 말해 주는 값과 같다. **이미 받아 온 목록에서 나오므로
-    조회가 늘지 않는다.**
+def next_stop_name(stops, ars):
+    """그 기둥에서 차가 **다음에 서는 정류장**. 모르면 None.
 
     **길 양쪽 기둥을 사람이 가리는 데 쓴다.** 노선번호로 좁혀도 상·하행 둘이
-    남는데, 귀가하는 사람은 자기가 어느 방향으로 가는지 안다. 자동으로 정하지
-    않는다 — 여기는 사람이 보고 있는 화면이다.
+    남는다(풍산역 20753 · 58271). 귀가하는 사람은 자기가 가는 방향에 무엇이
+    있는지 알아서, 다음 정류장 이름 하나로 고를 수 있다.
+
+    **`종점 방면` 을 적으려다 그만뒀다.** 회차점을 알아야 하는데 서울 자료에는
+    표시가 없고, 규칙으로 짚는 것이 안 됐다 — 2026-08-27 에 두 규칙을 5개
+    노선으로 재 봤다.
+
+        출발점에서 가장 먼 정류장    5개 중 1개만 맞음
+        같은 이름 쌍 사이의 창       5개 중 4개 (81번이 창 밖)
+
+    4/5 로 맞는 규칙은 **5번째 사람의 화면을 조용히 틀리게 한다.** 다음 정류장은
+    순서 목록의 그 다음 줄일 뿐이라 짐작이 없다. 서울과 경기가 같은 방법을 쓴다.
+
+    자동으로 방향까지 정하지는 않는다 — 여기는 사람이 보고 있는 화면이다.
     """
     if not stops:
         return None
-    here = next((s for s in stops if s.get("no") == str(ars)), None)
-    if not here:
-        return None
-    turn = next((s for s in stops if s.get("turn")), None)
-    if turn and here["seq"] <= turn["seq"]:
-        return turn["name"]
-    return stops[-1]["name"]
+    order = sorted(stops, key=lambda s: s["seq"])
+    for index, stop in enumerate(order):
+        if stop.get("no") == str(ars):
+            return order[index + 1]["name"] if index + 1 < len(order) else None
+    return None
 
 
 def stops_named(stops, name):
@@ -1734,6 +1734,42 @@ def gbis_stops_named(text, limit=8):
     return out[:limit]
 
 
+def route_stop_lists(route_no):
+    """그 노선의 정류장 순서 목록들. 경기(GBIS) 먼저, 없으면 서울(TOPIS).
+
+    같은 번호가 여러 노선일 수 있으므로 목록을 여러 개 낸다. 부르는 쪽이
+    이름이 맞는 것을 골라 쓴다.
+    """
+    want = str(route_no or "").strip()
+    if not want:
+        return
+    found = False
+    for route_id in gbis_route_ids(want):
+        stops = gbis_route_stops(route_id)
+        if stops:
+            found = True
+            yield stops
+    if found:
+        return
+    at = datetime.now(timezone.utc)
+    index = {row[3]: row for row in SEOUL_STOPS if len(row) > 3 and row[3]}
+    for route_id in seoul_routes().get(want) or []:
+        stops = []
+        for item in seoul_arrival_items_cached(route_id, at):
+            ars = _tag(item, "arsId")
+            row = index.get(ars)
+            if not row:
+                continue
+            try:
+                seq = int(_tag(item, "staOrd"))
+            except ValueError:
+                continue
+            stops.append({"id": ars, "no": ars, "name": row[0],
+                          "lat": row[1], "lon": row[2], "seq": seq})
+        if stops:
+            yield sorted(stops, key=lambda s: s["seq"])
+
+
 def route_stop_numbers(route_no):
     """그 노선이 서는 정류장의 **기둥번호** 집합. 못 찾으면 빈 집합.
 
@@ -1743,41 +1779,24 @@ def route_stop_numbers(route_no):
     **서울은 정류소별 경유노선을 못 묻는다**(`stationinfo/*` 가 401, 2026-08-27
     재확인). 그래서 반대로 간다 — 노선 하나를 불러 그 정류장 목록을 받는다.
     """
-    want = str(route_no or "").strip()
-    if not want:
-        return set()
     numbers = set()
-    for route_id in gbis_route_ids(want):
-        numbers |= {s["no"] for s in gbis_route_stops(route_id) if s.get("no")}
-    if numbers:
-        return numbers
-    at = datetime.now(timezone.utc)
-    for route_id in seoul_routes().get(want) or []:
-        for item in seoul_arrival_items_cached(route_id, at):
-            ars = _tag(item, "arsId")
-            if ars:
-                numbers.add(ars)
+    for stops in route_stop_lists(route_no):
+        numbers |= {s["no"] for s in stops if s.get("no")}
     return numbers
 
 
-def label_directions(stops, route_no):
-    """좁혀진 정류장에 **방면**을 적어 준다. 모르면 안 적는다.
+def label_next_stops(stops, route_no):
+    """좁혀진 정류장에 **다음 정류장**을 적어 준다. 모르면 안 적는다.
 
-    노선번호로 좁혀도 길 양쪽 두 기둥이 남는다(풍산역 20753 · 58271). 둘 다 그
-    노선이 서니 자료로는 더 못 줄인다. **그런데 귀가하는 사람은 자기가 어느
-    방향으로 가는지 안다** — 한 단어만 보여 주면 고를 수 있다.
-
-    자동으로 정하지 않는다. 여기는 사람이 보고 있는 화면이다.
+    이미 받아 온 순서 목록에서 나오므로 **조회가 늘지 않는다.** 경기는 GBIS
+    경유정류소, 서울은 TOPIS 도착정보의 목록이다 — 둘 다 순서가 있다.
     """
-    for route_id in gbis_route_ids(route_no):
-        on_route = gbis_route_stops(route_id)
-        if not on_route:
-            continue
+    for on_route in route_stop_lists(route_no):
         marked = False
         for stop in stops:
-            where = route_direction(on_route, stop.get("ars"))
+            where = next_stop_name(on_route, stop.get("ars"))
             if where:
-                stop["dest"] = where
+                stop["next"] = where
                 marked = True
         if marked:
             return stops
@@ -3421,7 +3440,7 @@ class Handler(BaseHTTPRequestHandler):
                     narrowed = narrow_by_route(found, route_no)
                     # 좁혀도 길 양쪽 둘이 남는다. 어느 쪽으로 가는 차인지
                     # 적어 주면 사람이 고른다.
-                    label_directions(narrowed, route_no)
+                    label_next_stops(narrowed, route_no)
                     log(f"  정류장 '{text}' + {route_no}번 → "
                         f"{len(found)}건 중 {len(narrowed)}건")
                     found = narrowed
