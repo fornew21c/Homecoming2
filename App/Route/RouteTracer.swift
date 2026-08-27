@@ -89,7 +89,12 @@ struct RouteTracer {
     ///
     /// 서버만 공공데이터 키를 갖고 있어서 이 조회는 서버를 거친다. 실패하면
     /// 빈 배열이 오고, 그때는 지금까지처럼 자동차 경로다.
+    /// **하차 좌표도 넘긴다.** 이름만으로는 길 양쪽 기둥을 못 가른다 —
+    /// `위시티1.3단지` 가 5.0m 와 32.8m 로 둘 나왔고 둘 다 노선 순서가 승차보다
+    /// 뒤여서 방향으로도 안 갈렸다(2026-08-27 실측). 사용자가 지도에서 찍은
+    /// 점이 그것을 가른다.
     var busWaypoints: ((_ no: String, _ from: CLLocationCoordinate2D,
+                        _ to: CLLocationCoordinate2D,
                         _ fromName: String, _ toName: String) async -> [CLLocationCoordinate2D])?
 
     /// 지하철 구간이 지나는 **역** 좌표를 물어 준다. nil 이면 두 역 직선으로 그린다.
@@ -199,7 +204,7 @@ struct RouteTracer {
             return (try await line(step.mode, from: from, to: to, label: step.toName), false)
         }
 
-        let stops = await ask(no, from, fromName, step.toName)
+        let stops = await ask(no, from, to, fromName, step.toName)
         guard !stops.isEmpty else {
             // 노선을 못 찾았다(서울 시내버스는 이 자료에 없고, 경기도 시군구 코드도
             // 확인된 것만 서버가 들고 있다). 예전처럼 자동차 경로로 그린다.

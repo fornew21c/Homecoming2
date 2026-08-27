@@ -44,8 +44,8 @@ enum RouteSample {
             tracer.subwayWaypoints = { fromName, toName in
                 await environment.routes.subwayWaypoints(fromName: fromName, toName: toName)
             }
-            tracer.busWaypoints = { no, from, fromName, toName in
-                await environment.routes.busWaypoints(no: no, from: from,
+            tracer.busWaypoints = { no, from, to, fromName, toName in
+                await environment.routes.busWaypoints(no: no, from: from, to: to,
                                                      fromName: fromName, toName: toName)
             }
             let plotted = try await tracer.plot(origin: origin, steps: steps)

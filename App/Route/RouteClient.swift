@@ -44,6 +44,7 @@ protocol RouteClient: Sendable {
     /// 노선 자료가 서버에만 있어서(공공데이터 키가 서버에 있다) 이쪽으로 묻는다.
     /// 서울 시내버스는 이 자료에 없으므로 빈 배열이 정상 응답이다.
     func busWaypoints(no: String, from: CLLocationCoordinate2D,
+                      to: CLLocationCoordinate2D,
                       fromName: String, toName: String) async throws -> [CLLocationCoordinate2D]
 
     /// 지하철 한 구간이 지나는 **역** 좌표. 빈 배열이면 그릴 것이 없다.
@@ -400,6 +401,7 @@ struct RemoteRouteClient: RouteClient {
     }
 
     func busWaypoints(no: String, from: CLLocationCoordinate2D,
+                      to: CLLocationCoordinate2D,
                       fromName: String, toName: String) async throws -> [CLLocationCoordinate2D] {
         struct Response: Decodable {
             let points: [[Double]]
@@ -409,9 +411,13 @@ struct RemoteRouteClient: RouteClient {
         func escape(_ text: String) -> String {
             text.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
         }
-        let path = String(format: "bus/leg?no=%@&from=%@&to=%@&fromLat=%.6f&fromLon=%.6f",
+        // **하차 좌표도 보낸다.** 서버가 이름만으로는 길 양쪽 기둥을 못 가른다 —
+        // `위시티1.3단지` 가 두 곳이고 둘 다 노선 순서가 승차보다 뒤다
+        // (2026-08-27 실측). 사용자가 지도에서 찍은 이 점이 그것을 가른다.
+        let path = String(format: "bus/leg?no=%@&from=%@&to=%@" +
+                          "&fromLat=%.6f&fromLon=%.6f&toLat=%.6f&toLon=%.6f",
                           escape(no), escape(fromName), escape(toName),
-                          from.latitude, from.longitude)
+                          from.latitude, from.longitude, to.latitude, to.longitude)
         // **다른 요청보다 넉넉히 기다린다.** 서버가 노선표를 아직 안 받아 뒀으면
         // 시도 전체를 훑어야 하고(경기 4,671개, 15초), 정류장 좌표도 이름마다
         // 한 번씩 묻는다. 10초에 끊으면 그 구간이 조용히 자동차 경로로 저장된다.
@@ -495,6 +501,7 @@ struct UnavailableRouteClient: RouteClient {
     func stops(near coordinate: CLLocationCoordinate2D) async throws -> [BusStop] { [] }
     func stops(named text: String) async throws -> [BusStop] { [] }
     func busWaypoints(no: String, from: CLLocationCoordinate2D,
+                      to: CLLocationCoordinate2D,
                       fromName: String, toName: String) async throws -> [CLLocationCoordinate2D] { [] }
     func subwayWaypoints(fromName: String,
                          toName: String) async throws -> [CLLocationCoordinate2D] { [] }

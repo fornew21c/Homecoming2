@@ -1249,6 +1249,30 @@ def pick_leg_stops(stops, from_name, to_name):
             "alighting": uniq([a for _, a in pairs])}
 
 
+# 좌표로 후보를 좁힐 때 믿을 거리. `seoul_bus_arrival` 이 같은 판단에 쓰는 값이다 —
+# 저장된 승·하차점은 정류장 좌표에서 나온 값이라 수백 m 씩 벌어질 이유가 없다.
+# 실측(2026-08-27)은 5.0m · 32.8m · 2.1m 였다.
+LEG_STOP_SNAP_METERS = 500
+
+
+def nearest_stop(stops, lat, lon):
+    """후보 중 그 좌표에 가장 가까운 하나. **좁힐 수 없으면 후보를 그대로 둔다.**
+
+    이름만으로는 못 가르는 자리가 있다 — `위시티1.3단지` 가 길 양쪽에 있고
+    둘 다 승차보다 뒤 순번이라 방향 조건을 통과한다(2026-08-27 실측:
+    20796 seq 21 이 5.0m, 20795 seq 70 이 32.8m). **좌표가 있으면 그것이 답이다.**
+
+    좌표가 없거나(캡처로 만든 경로) 너무 멀면 안 고른다. 확신 없이 하나를
+    고르는 것보다 후보를 넘기는 편이 낫다.
+    """
+    if lat is None or lon is None or len(stops) < 2:
+        return stops
+    best = min(stops, key=lambda stop: haversine(lat, lon, stop["lat"], stop["lon"]))
+    if haversine(lat, lon, best["lat"], best["lon"]) > LEG_STOP_SNAP_METERS:
+        return stops
+    return [best]
+
+
 def bus_leg_stops(route_no, from_name, to_name):
     """이름만으로 버스 구간의 승차·하차 정류소를 정한다. **좌표를 안 쓴다.**
 
@@ -3116,27 +3140,35 @@ class Handler(BaseHTTPRequestHandler):
 
             # **좌표는 이제 선택이다.** 있으면 지금까지처럼 좌표열을 그리고, 없으면
             # 이름만으로 정류장을 찾는다. 옛 앱은 늘 보내므로 동작이 그대로다.
-            from_lat = from_lon = None
-            if query.get("fromLat") and query.get("fromLon"):
+            def coordinate(lat_key, lon_key):
+                if not (query.get(lat_key) and query.get(lon_key)):
+                    return None, None
                 try:
-                    from_lat = float(query["fromLat"][0])
-                    from_lon = float(query["fromLon"][0])
+                    return float(query[lat_key][0]), float(query[lon_key][0])
                 except ValueError:
-                    return self.reply(400, {"error": "fromLat/fromLon 이 숫자가 아닙니다"})
+                    return "나쁜값", None
+
+            from_lat, from_lon = coordinate("fromLat", "fromLon")
+            to_lat, to_lon = coordinate("toLat", "toLon")
+            if from_lat == "나쁜값" or to_lat == "나쁜값":
+                return self.reply(400, {"error": "좌표가 숫자가 아닙니다"})
 
             points, missing = [], []
             if from_lat is not None:
                 points, missing = bus_leg_waypoints(route_no, from_lat, from_lon,
                                                     to_name, from_name)
             picked = leg_stops(route_no, from_name, to_name)
+            # **좌표가 오면 그것이 답이다.** 이름만으로는 길 양쪽 기둥을 못 가른다 —
+            # `위시티1.3단지` 가 5.0m 와 32.8m 로 둘 나왔고 둘 다 방향 조건을
+            # 통과했다(2026-08-27 실측). 사용자가 지도에서 찍은 점이 그것을 가른다.
+            boarding = nearest_stop(picked["boarding"], from_lat, from_lon)
+            alighting = nearest_stop(picked["alighting"], to_lat, to_lon)
             note = f" · 좌표 못 찾음 {missing}" if missing else ""
             log(f"  버스 {route_no} {from_name or '?'} → {to_name}: "
                 f"경유 정류장 {len(points)}개{note} · "
-                f"승차 후보 {len(picked['boarding'])}개 "
-                f"하차 후보 {len(picked['alighting'])}개")
+                f"승차 후보 {len(boarding)}개 하차 후보 {len(alighting)}개")
             return self.reply(200, {"points": points, "missing": missing,
-                                    "boarding": picked["boarding"],
-                                    "alighting": picked["alighting"]})
+                                    "boarding": boarding, "alighting": alighting})
 
         # 지하철 구간의 경유 역. `/bus/leg` 와 같은 자리, 같은 계약이다 —
         # 빈 결과는 실패가 아니고, 앱은 그때 두 역 직선으로 그리며 그 사실을 화면에 적는다.

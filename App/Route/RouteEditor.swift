@@ -270,8 +270,8 @@ struct RouteEditor: View {
             tracer.subwayWaypoints = { [store] fromName, toName in
                 await store.subwayWaypoints(fromName: fromName, toName: toName)
             }
-            tracer.busWaypoints = { [store] no, from, fromName, toName in
-                await store.busWaypoints(no: no, from: from,
+            tracer.busWaypoints = { [store] no, from, to, fromName, toName in
+                await store.busWaypoints(no: no, from: from, to: to,
                                          fromName: fromName, toName: toName)
             }
             let plotted = try await tracer.plot(origin: originCoordinate, steps: resolvedSteps)

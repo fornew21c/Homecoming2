@@ -342,5 +342,40 @@ class BusLegResolveTests(unittest.TestCase):
         self.assertEqual(got, seoul)
 
 
+class NearestStopTests(unittest.TestCase):
+    """좌표가 오면 후보를 하나로 좁힌다.
+
+    실측(2026-08-27) — `위시티1.3단지` 가 길 양쪽에 있고 이름이 같다.
+      20796 seq 21  저장된 도착점에서   5.0m   ← 실제로 이것
+      20795 seq 70  저장된 도착점에서  32.8m
+    """
+
+    WISHITY = [
+        {"id": "GGB219000776", "no": "20796", "name": "위시티1.3단지",
+         "lat": 37.6822, "lon": 126.8108, "seq": 21},
+        {"id": "GGB219000775", "no": "20795", "name": "위시티1.3단지",
+         "lat": 37.68245, "lon": 126.8107833, "seq": 70},
+    ]
+
+    def test_가까운_것_하나로_좁힌다(self):
+        got = hs.nearest_stop(self.WISHITY, 37.682155, 126.810803)
+        self.assertEqual([s["no"] for s in got], ["20796"])
+
+    def test_좌표가_없으면_그대로_둔다(self):
+        self.assertEqual(hs.nearest_stop(self.WISHITY, None, None), self.WISHITY)
+
+    def test_후보가_하나면_그대로다(self):
+        one = self.WISHITY[:1]
+        self.assertEqual(hs.nearest_stop(one, 37.0, 127.0), one)
+
+    def test_너무_멀면_안_좁힌다(self):
+        # 좌표가 엉뚱하면 확신해서 고르지 않는다. 후보를 그대로 둔다.
+        got = hs.nearest_stop(self.WISHITY, 37.5000, 127.5000)
+        self.assertEqual(got, self.WISHITY)
+
+    def test_빈_후보는_빈_채로(self):
+        self.assertEqual(hs.nearest_stop([], 37.0, 127.0), [])
+
+
 if __name__ == "__main__":
     unittest.main()

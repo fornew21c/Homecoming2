@@ -59,9 +59,10 @@ final class RouteStore {
 
     /// 버스 한 구간이 지나는 정류장 좌표. 실패하면 빈 배열 — 그때는 자동차 경로다.
     func busWaypoints(no: String, from: CLLocationCoordinate2D,
+                      to: CLLocationCoordinate2D,
                       fromName: String, toName: String) async -> [CLLocationCoordinate2D] {
         guard isAvailable else { return [] }
-        return (try? await client.busWaypoints(no: no, from: from,
+        return (try? await client.busWaypoints(no: no, from: from, to: to,
                                               fromName: fromName, toName: toName)) ?? []
     }
 
