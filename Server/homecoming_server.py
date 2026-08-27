@@ -1089,6 +1089,214 @@ def arrival_stop(lat, lon, now=None):
     return found
 
 
+# --- 경기도 GBIS ------------------------------------------------------------
+#
+# **왜 TAGO 말고 이것인가.** TAGO 에는 "노선 하나로 그 노선 정류장 전부" 라는 호출이
+# 없다. 정류장을 주면 거기 오는 노선이 온다 — 방향이 반대다. 그래서 이름만 있을 때
+# 어느 기둥인지 정할 근거가 없었다. 풍산역은 기둥이 넷이고 999는 그중 둘에만 선다.
+#
+# GBIS 에는 그 호출이 있다(`getBusRouteStationListv2`). 게다가 **정류소 id 가 TAGO 와
+# 같은 번호다** — TAGO `GGB219000638` = GBIS `219000638`(2026-08-27, 기둥 5개 확인).
+# 갈아타는 것이 아니라 덧붙이는 것이다.
+#
+# 공공데이터포털 같은 키를 쓴다. 활용신청은 서비스마다 따로다(2026-08-27 승인).
+GBIS = "https://apis.data.go.kr/6410000"
+
+_gbis_routes = {}         # 노선번호 → [노선id, ...]
+_gbis_route_stops = {}    # 노선id → [정류소, ...]
+
+
+def gbis_get(path, params):
+    """GBIS 호출. 실패는 None, 결과 없음은 빈 dict.
+
+    **둘을 갈라야 한다.** 결과 없음을 실패로 읽으면 다음 노선 후보로 안 넘어가고,
+    실패를 결과 없음으로 읽으면 캐시에 빈 값이 박힌다.
+
+        resultCode 0   정상. `msgBody` 가 온다
+        resultCode 4   "결과가 존재하지 않습니다". **`msgBody` 자체가 없다**
+                       (2026-08-27 실측 — `위시티1,3단지` 로 물으면 이렇게 온다)
+    """
+    query = urllib.parse.urlencode({"serviceKey": TAGO_KEY, "format": "json", **params})
+    try:
+        with urllib.request.urlopen(f"{GBIS}/{path}?{query}", timeout=15,
+                                    context=outbound_tls()) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except Exception as error:                                  # noqa: BLE001
+        log(f"  GBIS {path} 실패: {error!r}")
+        return None
+    inner = body.get("response") or {}
+    code = str((inner.get("msgHeader") or {}).get("resultCode", ""))
+    if code == "4":
+        return {}
+    if code != "0":
+        log(f"  GBIS {path} resultCode={code}")
+        return None
+    return inner.get("msgBody") or {}
+
+
+def gbis_route_ids(route_no):
+    """그 번호를 쓰는 경기도 노선 id 들. 순서는 자료가 준 그대로.
+
+    **같은 번호가 여럿이다** — 999 는 고양(218000111)과 수원·용인·화성
+    (200000013) 둘이다(2026-08-27 실측). 여기서 고르지 않는다. **고르는 것은
+    정류장 이름이 한다** — 두 이름이 다 들어 있는 노선만 뒤에서 살아남는다.
+    `bus_route_stop_names` 가 이미 같은 방법을 쓴다.
+
+    `keyword` 는 부분일치라 `999` 로 물으면 `N999` 도 온다. 번호가 정확히
+    같은 것만 받는다.
+    """
+    key = str(route_no).strip()
+    if key in _gbis_routes:
+        return _gbis_routes[key]
+    body = gbis_get("busrouteservice/v2/getBusRouteListv2", {"keyword": key})
+    if body is None:
+        return []                  # **실패는 캐시하지 않는다.** 다음에 다시 묻는다
+    ids = [str(row["routeId"]) for row in body.get("busRouteList") or []
+           if row.get("routeId") and str(row.get("routeName") or "").strip() == key]
+    _gbis_routes[key] = ids
+    return ids
+
+
+def gbis_route_stops(route_id):
+    """그 노선의 경유정류소 — 순서대로, 기둥 단위로, 좌표까지.
+
+    돌려주는 것: `[{"id", "no", "name", "lat", "lon", "seq"}, ...]`
+
+    **`id` 에 `GGB` 를 붙인다.** 저장된 경로와 도착 조회가 TAGO id 를 쓰는데,
+    TAGO `GGB219000638` 과 GBIS `219000638` 이 같은 번호다(2026-08-27, 기둥
+    5개 확인). 같은 모양으로 맞춰 두면 뒤에서 견줄 수 있다.
+
+    999(218000111)는 92개가 `stationSeq` 1~92 로 온다. **같은 정류소가 두 번
+    나오는 노선은 없었다** — 999 · 7770 · 7780 · 7790 등 7개에서 중복 0개
+    (2026-08-27). 그래서 `seq` 로 방향을 가려도 무너지지 않는다.
+    """
+    key = str(route_id)
+    if key in _gbis_route_stops:
+        return _gbis_route_stops[key]
+    body = gbis_get("busrouteservice/v2/getBusRouteStationListv2", {"routeId": key})
+    if body is None:
+        return []                  # 실패는 캐시하지 않는다
+    stops = []
+    for row in body.get("busRouteStationList") or []:
+        # **줄 하나가 망가졌다고 노선을 버리지 않는다.** 다만 조용히 채우지도
+        # 않는다 — 좌표가 없는 정류소는 후보가 될 수 없으므로 빼는 것이 맞다.
+        try:
+            stops.append({
+                "id": f"GGB{row['stationId']}",
+                "no": str(row.get("mobileNo") or "").strip() or None,
+                "name": row["stationName"],
+                "lat": float(row["y"]),
+                "lon": float(row["x"]),
+                "seq": int(row["stationSeq"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    stops.sort(key=lambda stop: stop["seq"])
+    _gbis_route_stops[key] = stops
+    return stops
+
+
+def stops_named(stops, name):
+    """이름으로 정류소 후보를 고른다. 못 찾으면 빈 목록.
+
+    **하나로 줄이지 않는다.** 완전일치가 정확히 하나면 결과도 하나가 되고,
+    그때만 부르는 쪽이 확정으로 쓴다. 그 밖에는 후보를 그대로 준다.
+
+    줄이면 안 되는 이유 — 이름이 세 갈래다. 사용자가 적은 것(`풍산역
+    버스정류장`), 자료의 것(`풍산역`), 길찾기 앱의 것. 지금 코드에는 이름
+    매칭이 실패하면 **좌표 근처 정류장으로 폴백**하는 안전망이 있는데
+    (`bus_leg_waypoints`), 좌표를 안 받는 길에는 그 안전망이 없다. 여기서
+    억지로 하나를 고르면 그게 곧 조용히 틀린 값이 된다.
+
+    `name_key` 는 이 아래(`n_eq` 옆)에 있다. 파이썬은 부를 때 찾으므로
+    문제가 없고, 이 파일이 이미 그렇게 되어 있다.
+    """
+    want = name_key(name)
+    if not want:
+        return []
+    exact = [stop for stop in stops if name_key(stop["name"]) == want]
+    if exact:
+        return exact
+    return [stop for stop in stops
+            if want in name_key(stop["name"]) or name_key(stop["name"]) in want]
+
+
+def pick_leg_stops(stops, from_name, to_name):
+    """정류소 목록에서 승차·하차 후보를 고른다. 방향이 안 맞으면 None.
+
+    **순서가 방향이다.** 길 양쪽 기둥이 같은 노선인데 `seq` 가 다르다 —
+    풍산역 20753 은 13(신원중학교행), 58271 은 78(대화역행)이다(2026-08-27
+    실측). 승차가 하차보다 앞에 있는 쌍만 그 방향이다. **짐작이 아니라 순서로
+    정해진다.**
+
+    None 은 "이 노선이 아니다" 이고, 부르는 쪽이 다음 후보 노선으로 넘어간다.
+    """
+    boarding = stops_named(stops, from_name)
+    alighting = stops_named(stops, to_name)
+    pairs = [(b, a) for b in boarding for a in alighting if b["seq"] < a["seq"]]
+    if not pairs:
+        return None
+
+    def uniq(rows):
+        seen, out = set(), []
+        for row in rows:
+            if row["id"] not in seen:
+                seen.add(row["id"])
+                out.append(row)
+        return out
+
+    return {"boarding": uniq([b for b, _ in pairs]),
+            "alighting": uniq([a for _, a in pairs])}
+
+
+# 좌표로 후보를 좁힐 때 믿을 거리. `seoul_bus_arrival` 이 같은 판단에 쓰는 값이다 —
+# 저장된 승·하차점은 정류장 좌표에서 나온 값이라 수백 m 씩 벌어질 이유가 없다.
+# 실측(2026-08-27)은 5.0m · 32.8m · 2.1m 였다.
+LEG_STOP_SNAP_METERS = 500
+
+
+def nearest_stop(stops, lat, lon):
+    """후보 중 그 좌표에 가장 가까운 하나. **좁힐 수 없으면 후보를 그대로 둔다.**
+
+    이름만으로는 못 가르는 자리가 있다 — `위시티1.3단지` 가 길 양쪽에 있고
+    둘 다 승차보다 뒤 순번이라 방향 조건을 통과한다(2026-08-27 실측:
+    20796 seq 21 이 5.0m, 20795 seq 70 이 32.8m). **좌표가 있으면 그것이 답이다.**
+
+    좌표가 없거나(캡처로 만든 경로) 너무 멀면 안 고른다. 확신 없이 하나를
+    고르는 것보다 후보를 넘기는 편이 낫다.
+    """
+    if lat is None or lon is None or len(stops) < 2:
+        return stops
+    best = min(stops, key=lambda stop: haversine(lat, lon, stop["lat"], stop["lon"]))
+    if haversine(lat, lon, best["lat"], best["lon"]) > LEG_STOP_SNAP_METERS:
+        return stops
+    return [best]
+
+
+def bus_leg_stops(route_no, from_name, to_name):
+    """이름만으로 버스 구간의 승차·하차 정류소를 정한다. **좌표를 안 쓴다.**
+
+    돌려주는 것: `{"boarding": [...], "alighting": [...]}` — 못 찾으면 둘 다 빈
+    목록이다. **빈 것은 실패가 아니다.** `toName` 은 원래 표시용 자유 문구라
+    (`163번 대기` 같은 것도 들어간다) 못 찾는 것이 정상인 경우가 있다.
+    `points: []` 가 이미 "그릴 것이 없다" 로 쓰이는 것과 같은 계약이다.
+
+    **후보가 정확히 하나일 때만 확정이다.** 그 규칙은 부르는 쪽에 있다 —
+    여기서는 찾은 것을 그대로 준다.
+    """
+    empty = {"boarding": [], "alighting": []}
+    if not str(route_no or "").strip():
+        return empty
+    for route_id in gbis_route_ids(route_no):
+        stops = gbis_route_stops(route_id)
+        if not stops:
+            continue
+        picked = pick_leg_stops(stops, from_name, to_name)
+        if picked:
+            return picked
+    return empty
+
+
 # --- 서울 버스 실시간 도착 --------------------------------------------------
 #
 # **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을
@@ -1227,6 +1435,57 @@ def seoul_bus_arrival(lat, lon, route_no, now=None):
     return None
 
 
+def seoul_leg_stops(route_no, from_name, to_name):
+    """서울 노선의 승차·하차 정류장. `bus_leg_stops` 와 **같은 모양**을 돌려준다.
+
+    **정류장 목록을 도착정보 호출에서 얻는다.** 경기(`getBusRouteStationListv2`)와
+    성격이 다르다 — 그쪽은 시간과 무관한 노선 자료인데, 이쪽은 지금 오는 차를
+    묻는 김에 정류장이 딸려 오는 것이다. 차가 안 다니는 시간에 비는지는 실측으로
+    확인했다(아래 주석). 비면 그 시간대에 후보를 못 주고, 그건 빈 결과이지 틀린
+    값이 아니다.
+
+    `staOrd` 가 경기의 `seq` 와 같은 자리를 한다 — 노선 안에서의 순서다.
+    """
+    empty = {"boarding": [], "alighting": []}
+    want = str(route_no or "").strip()
+    if not want:
+        return empty
+    at = datetime.now(timezone.utc)
+    index = {row[3]: row for row in SEOUL_STOPS if len(row) > 3 and row[3]}
+    for route_id in seoul_routes().get(want) or []:
+        stops = []
+        for item in seoul_arrival_items_cached(route_id, at):
+            ars = _tag(item, "arsId")
+            row = index.get(ars)
+            if not row:
+                continue
+            try:
+                seq = int(_tag(item, "staOrd"))
+            except ValueError:
+                continue
+            stops.append({"id": ars, "no": ars, "name": row[0],
+                          "lat": row[1], "lon": row[2], "seq": seq})
+        if not stops:
+            continue
+        stops.sort(key=lambda stop: stop["seq"])
+        picked = pick_leg_stops(stops, from_name, to_name)
+        if picked:
+            return picked
+    return empty
+
+
+def leg_stops(route_no, from_name, to_name):
+    """버스 구간의 승차·하차 정류장 — 경기를 먼저 보고, 없으면 서울.
+
+    `bus_arrival` 이 이미 같은 순서로 넘긴다(TAGO 에서 못 찾으면 TOPIS).
+    같은 순서를 쓰면 두 자리가 어긋나지 않는다.
+    """
+    picked = bus_leg_stops(route_no, from_name, to_name)
+    if picked["boarding"] or picked["alighting"]:
+        return picked
+    return seoul_leg_stops(route_no, from_name, to_name)
+
+
 def bus_arrival(lat, lon, route_no, now=None):
     """그 자리에서 탈 `route_no` 버스가 언제 오는가. 모르면 None.
 
@@ -1288,14 +1547,20 @@ def bus_arrival(lat, lon, route_no, now=None):
     return value
 
 
-def n_eq(a, b):
-    """정류장 이름 비교. 표기 차이를 흡수한다.
+def name_key(name):
+    """정류장 이름 비교용 열쇠. 점·쉼표·공백·가운뎃점을 지운다.
 
     같은 정류장을 자료마다 다르게 적는다 — `아파트단지` 와 `아파트단지`,
-    `환승로터리` 와 `환승로터리`. 점·쉼표·공백을 지우고 견준다.
+    `환승로터리` 와 `환승로터리`. 그리고 사용자가 적은 `위시티1,3단지` 가
+    자료에서는 `위시티1.3단지` 다 — **쉼표로 그대로 물으면 결과가 0건이다**
+    (2026-08-27 실측).
     """
-    trans = str.maketrans("", "", " .,·")
-    return (a or "").translate(trans) == (b or "").translate(trans)
+    return (name or "").translate(str.maketrans("", "", " .,·"))
+
+
+def n_eq(a, b):
+    """정류장 이름 비교. 표기 차이를 흡수한다."""
+    return name_key(a) == name_key(b)
 
 
 def outbound_tls():
@@ -2870,19 +3135,40 @@ class Handler(BaseHTTPRequestHandler):
             route_no = (query.get("no", [""])[0] or "").strip()
             to_name = (query.get("to", [""])[0] or "").strip()
             from_name = (query.get("from", [""])[0] or "").strip() or None
-            try:
-                from_lat = float(query.get("fromLat", [""])[0])
-                from_lon = float(query.get("fromLon", [""])[0])
-            except ValueError:
-                return self.reply(400, {"error": "fromLat/fromLon 이 필요합니다"})
             if not route_no or not to_name:
                 return self.reply(400, {"error": "no/to 가 필요합니다"})
-            points, missing = bus_leg_waypoints(route_no, from_lat, from_lon,
-                                                to_name, from_name)
+
+            # **좌표는 이제 선택이다.** 있으면 지금까지처럼 좌표열을 그리고, 없으면
+            # 이름만으로 정류장을 찾는다. 옛 앱은 늘 보내므로 동작이 그대로다.
+            def coordinate(lat_key, lon_key):
+                if not (query.get(lat_key) and query.get(lon_key)):
+                    return None, None
+                try:
+                    return float(query[lat_key][0]), float(query[lon_key][0])
+                except ValueError:
+                    return "나쁜값", None
+
+            from_lat, from_lon = coordinate("fromLat", "fromLon")
+            to_lat, to_lon = coordinate("toLat", "toLon")
+            if from_lat == "나쁜값" or to_lat == "나쁜값":
+                return self.reply(400, {"error": "좌표가 숫자가 아닙니다"})
+
+            points, missing = [], []
+            if from_lat is not None:
+                points, missing = bus_leg_waypoints(route_no, from_lat, from_lon,
+                                                    to_name, from_name)
+            picked = leg_stops(route_no, from_name, to_name)
+            # **좌표가 오면 그것이 답이다.** 이름만으로는 길 양쪽 기둥을 못 가른다 —
+            # `위시티1.3단지` 가 5.0m 와 32.8m 로 둘 나왔고 둘 다 방향 조건을
+            # 통과했다(2026-08-27 실측). 사용자가 지도에서 찍은 점이 그것을 가른다.
+            boarding = nearest_stop(picked["boarding"], from_lat, from_lon)
+            alighting = nearest_stop(picked["alighting"], to_lat, to_lon)
             note = f" · 좌표 못 찾음 {missing}" if missing else ""
             log(f"  버스 {route_no} {from_name or '?'} → {to_name}: "
-                f"경유 정류장 {len(points)}개{note}")
-            return self.reply(200, {"points": points, "missing": missing})
+                f"경유 정류장 {len(points)}개{note} · "
+                f"승차 후보 {len(boarding)}개 하차 후보 {len(alighting)}개")
+            return self.reply(200, {"points": points, "missing": missing,
+                                    "boarding": boarding, "alighting": alighting})
 
         # 지하철 구간의 경유 역. `/bus/leg` 와 같은 자리, 같은 계약이다 —
         # 빈 결과는 실패가 아니고, 앱은 그때 두 역 직선으로 그리며 그 사실을 화면에 적는다.
