@@ -2740,6 +2740,19 @@ ARRIVAL_LEAD_SECONDS = 15 * 60
 ARRIVAL_WAITING_METERS = 150
 
 
+def outside_arrival_window(leg, progress):
+    """승차까지 `ARRIVAL_LEAD_SECONDS` 보다 더 남았나 — 그러면 안 묻는다.
+
+    **두 자리가 같은 자를 써야 한다.** 위치 보고에 얹히는 길(`arrival_ready`)과
+    화면이 30초마다 부르는 길(`handle_bus_arrival`)이 문턱을 따로 들면, 한쪽은
+    안 묻는데 다른 쪽은 묻는 창이 생긴다 — 창을 둔 이유가 없어진다.
+
+    **창은 아직 안 탔을 때만 잰다.** 이미 승차 시각을 지나 정류장에서 기다리는
+    중이면 남은 초가 음수이고, 그건 창 안이다.
+    """
+    return leg is not None and leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS
+
+
 def next_bus_leg(legs, progress, lat=None, lon=None):
     """다음에 **탈** 버스 구간. 없으면 None.
 
@@ -2867,9 +2880,7 @@ def arrival_ready(legs, progress, now=None, lat=None, lon=None):
         return arrival_says(legs, progress,
                             "앞에 탈 버스 구간이 없다 — 번호가 비었거나 이미 지났다")
     left = leg["startsAt"] - progress
-    # 창은 **아직 안 탔을 때만** 잰다. 이미 승차 시각을 지나 기다리는 중이면
-    # `left` 가 음수이고, 그건 창 안이다.
-    if left > ARRIVAL_LEAD_SECONDS:
+    if outside_arrival_window(leg, progress):
         return arrival_says(legs, progress,
                             f"{leg['busNo']}번 승차까지 {int(left)}초 — "
                             f"창 {ARRIVAL_LEAD_SECONDS}초 밖이라 안 묻는다")
@@ -2895,12 +2906,45 @@ def arrival_ready(legs, progress, now=None, lat=None, lon=None):
     # 이고 그건 참이다. 거짓말이 되는 것은 이미 지나간 뒤부터다.
     gone = value is not None and value["at"] < at
     if gone:
-        value = None
+        value = promoted_second_bus(value, at)
+        if value is None:
+            arrival_says(legs, progress,
+                         f"{leg['busNo']}번 앞차가 지났고 그다음 차를 모른다")
     elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
         return value
 
     start_arrival_refresh(leg["busNo"], lat, lon)
     return value
+
+
+def promoted_second_bus(value, at):
+    """앞차가 지났다. **그다음 차가 이제 다음 차다.** 그것도 지났으면 None.
+
+    **버리기만 하면 아는 것을 안 말하게 된다.** 위의 `gone` 은 이미 떠난 버스를
+    `18:42 도착` 이라고 말하지 않으려고 값을 통째로 지웠는데, 그 값 안에는
+    `thenAt` — 아직 오지 않은 그다음 차 — 이 같이 들어 있다. 실측에서 999번이
+    293초·1158초 두 대로 왔다(2026-08-26). 앞차가 지난 뒤에도 뒤차는 14분 넘게
+    참이다.
+
+    2026-08-27 실주행에서 이것으로 화면이 비었다. 풍산역 정류장에서 기다리는
+    중이었고, **앞차를 놓친 그 순간이 "다음 차 언제 오나" 가 가장 궁금한 순간**
+    인데 칩이 통째로 사라졌다. 다음 갱신이 새 값을 실어 줄 때까지 — 서서 기다리는
+    동안은 heartbeat 뿐이라 최소 2분 — 아무것도 없었다.
+
+    **그다음의 그다음은 모른다.** 자료가 두 대까지만 준다(`coming[0]`·`coming[1]`).
+    그래서 승격한 값에는 `thenAt` 이 없고, 화면의 둘째 줄이 사라진다 — 그것이
+    맞다. 모르는 것을 안다고 하지 않는다.
+
+    `measuredAt` 은 그대로 옮긴다. `thenStops` 도 `stops` 와 같은 속도로 늙으므로
+    같은 자로 재야 한다.
+    """
+    then_at = value.get("thenAt")
+    # `gone` 과 같은 자를 쓴다 — 엄격한 과거만 지난 것으로 본다.
+    if then_at is None or then_at < at:
+        return None
+    return {"no": value["no"], "at": then_at,
+            "stops": value.get("thenStops"),
+            "measuredAt": value.get("measuredAt")}
 
 
 def where_on_route(legs, lat, lon, progress):
@@ -3961,10 +4005,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "unknown session"})
 
         route = route_of(session)
-        leg = next_bus_leg(route["legs"], session["route_progress"] or 0,
+        progress = session["route_progress"] or 0
+        leg = next_bus_leg(route["legs"], progress,
                            session["last_lat"], session["last_lon"]) if route else None
         points = (leg or {}).get("points") or []
-        if leg and points:
+        # **창 밖이면 안 묻는다.** `arrival_ready` 와 같은 자다.
+        #
+        # 예전에는 이 자리에 창 검사가 없었다. 사람이 누를 때만 오는 요청이라
+        # 횟수가 사람 손가락으로 묶여 있었기 때문이다. 이제는 화면이 칩을 되살리려고
+        # 30초마다 스스로 부르므로(`ContentView` 의 `.task`), 그 묶임이 없다.
+        #
+        # **자원을 가진 쪽에서 막는다.** `ARRIVAL_BURST_SECONDS` 를 서버에 둔 것과
+        # 같은 이유다 — 앱이 언제 물어도 되게 하고, 물을 값어치가 있는지는 여기서
+        # 정한다. 창 밖에서는 공공데이터를 안 태우고 상태만 돌려준다.
+        far = outside_arrival_window(leg, progress)
+        if far:
+            log(f"  버스 {leg['busNo']} 도착 새로고침 건너뜀 — "
+                f"승차까지 {int(leg['startsAt'] - progress)}초, 창 밖이다")
+        if leg and points and not far:
             lat, lon = points[0][0], points[0][1]
             burst, value = arrival_recently_measured(leg["busNo"], lat, lon, now())
             if burst:

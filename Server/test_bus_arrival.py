@@ -279,6 +279,41 @@ class NextBusLegTests(unittest.TestCase):
         self.assertIsNone(hs.next_bus_leg(walk_only, 0))
 
 
+class ArrivalWindowSharedTests(unittest.TestCase):
+    """**창 문턱은 한 자다.**
+
+    위치 보고에 얹히는 길(`arrival_ready`)과 화면이 30초마다 부르는 길
+    (`handle_bus_arrival`)이 같은 함수를 쓴다. 따로 들면 한쪽은 안 묻는데
+    다른 쪽은 묻는 창이 생기고, 창을 둔 이유가 없어진다.
+    """
+
+    def leg_at(self, starts_at):
+        return {"startsAt": starts_at, "busNo": "999", "mode": "bus"}
+
+    def test_창_밖이면_참(self):
+        # 승차가 4140초인데 지금 2000초 — 2140초(35분) 남았다.
+        self.assertTrue(hs.outside_arrival_window(self.leg_at(4140), 2000))
+
+    def test_창_안이면_거짓(self):
+        # 900초 남았다 — 정확히 문턱이다. `>` 라 창 안이다.
+        self.assertFalse(hs.outside_arrival_window(self.leg_at(4140), 3240))
+
+    def test_승차_시각을_지났으면_창_안이다(self):
+        """정류장에서 기다리는 중이다. **이때가 값이 가장 필요한 순간이다.**"""
+        self.assertFalse(hs.outside_arrival_window(self.leg_at(4140), 4200))
+
+    def test_버스_구간이_없으면_거짓(self):
+        self.assertFalse(hs.outside_arrival_window(None, 0))
+
+    def test_arrival_ready_가_같은_자를_쓴다(self):
+        """문턱을 한쪽만 고치면 여기서 걸린다."""
+        with mock.patch.object(hs, "outside_arrival_window",
+                               lambda leg, progress: True), \
+             mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: self.fail("창 밖인데 물었다")):
+            self.assertIsNone(hs.arrival_ready(LEGS, 3300, now=NOW))
+
+
 class ArrivalWindowTests(unittest.TestCase):
     """승차 15분 전부터만 묻는다.
 
@@ -414,6 +449,81 @@ class StaleArrivalTests(unittest.TestCase):
         self.assertIsNone(got)
         # 신선해도 다시 묻는다 — 알고 싶은 것은 그다음 차다.
         self.assertEqual(len(started), 1)
+
+    def test_앞차가_지나면_그다음_차가_다음_차다(self):
+        """**버리기만 하면 아는 것을 안 말하게 된다.**
+
+        2026-08-27 실주행에서 풍산역 정류장에 서 있는 동안 칩이 통째로 사라졌다.
+        앞차가 지났다고 `thenAt` 까지 버렸는데, 그건 아직 오지 않은 차였다.
+        """
+        key = ("999", 37.673130, 126.787047)
+        # 실측 근거(2026-08-26): 999번이 293초·1158초 두 대로 왔다.
+        # 앞차는 1분 전에 지났고, 그다음 차는 14분 뒤다.
+        hs._arrival_ready[key] = (NOW, {
+            "no": "999", "stops": 0, "at": NOW - datetime.timedelta(minutes=1),
+            "measuredAt": NOW,
+            "thenAt": NOW + datetime.timedelta(minutes=14), "thenStops": 11})
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *a, **k: None):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertIsNotNone(got, "그다음 차가 있는데 아무것도 안 줬다")
+        self.assertEqual(got["at"], NOW + datetime.timedelta(minutes=14))
+        self.assertEqual(got["stops"], 11)
+        self.assertEqual(got["no"], "999")
+        # 정류장 수의 나이를 재는 자는 그대로 따라와야 한다.
+        self.assertEqual(got["measuredAt"], NOW)
+        # **그다음의 그다음은 모른다.** 자료가 두 대까지만 준다.
+        self.assertIsNone(got.get("thenAt"))
+
+    def test_그다음_차도_지났으면_안_준다(self):
+        key = ("999", 37.673130, 126.787047)
+        hs._arrival_ready[key] = (NOW, {
+            "no": "999", "stops": 0, "at": NOW - datetime.timedelta(minutes=5),
+            "measuredAt": NOW,
+            "thenAt": NOW - datetime.timedelta(minutes=1), "thenStops": 0})
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            got = hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertIsNone(got)
+        self.assertEqual(len(started), 1)
+
+    def test_그다음_차가_아예_없으면_안_준다(self):
+        """막차거나 배차가 뜸한 시간. 예전 동작 그대로다."""
+        key = ("999", 37.673130, 126.787047)
+        hs._arrival_ready[key] = (NOW, {
+            "no": "999", "stops": 0, "at": NOW - datetime.timedelta(minutes=1),
+            "measuredAt": NOW})
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *a, **k: None):
+            self.assertIsNone(hs.arrival_ready(LEGS, 3300, now=NOW))
+
+    def test_승격해도_배경_갱신은_시킨다(self):
+        """승격은 임시방편이다 — 진짜 값은 배경이 가져온다."""
+        key = ("999", 37.673130, 126.787047)
+        hs._arrival_ready[key] = (NOW, {
+            "no": "999", "stops": 0, "at": NOW - datetime.timedelta(minutes=1),
+            "measuredAt": NOW,
+            "thenAt": NOW + datetime.timedelta(minutes=14), "thenStops": 11})
+        started = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda *a, **k: started.append(a)):
+            hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertEqual(len(started), 1)
+
+    def test_아무것도_못_주면_이유를_말한다(self):
+        """**이 길만 조용했다.** 칩이 왜 없는지 말하게 해 뒀는데(2026-08-27)
+        `gone` 은 세 갈래를 안 거치고 빠져나가서, 정작 실주행에서 사라진 그
+        경우에 로그가 한 줄도 없었다."""
+        key = ("999", 37.673130, 126.787047)
+        hs._arrival_ready[key] = (NOW, {
+            "no": "999", "stops": 0, "at": NOW - datetime.timedelta(minutes=1),
+            "measuredAt": NOW})
+        said = []
+        hs._arrival_silence = None
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *a, **k: None), \
+             mock.patch.object(hs, "log", lambda *parts: said.append(" ".join(map(str, parts)))):
+            hs.arrival_ready(LEGS, 3300, now=NOW)
+        self.assertTrue(any("앞차가 지났" in line for line in said),
+                        f"이유를 안 말했다: {said}")
 
     def test_낡았어도_아직_안_지났으면_준다(self):
         key = ("999", 37.673130, 126.787047)
