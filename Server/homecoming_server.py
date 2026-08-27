@@ -1089,6 +1089,51 @@ def arrival_stop(lat, lon, now=None):
     return found
 
 
+# --- 경기도 GBIS ------------------------------------------------------------
+#
+# **왜 TAGO 말고 이것인가.** TAGO 에는 "노선 하나로 그 노선 정류장 전부" 라는 호출이
+# 없다. 정류장을 주면 거기 오는 노선이 온다 — 방향이 반대다. 그래서 이름만 있을 때
+# 어느 기둥인지 정할 근거가 없었다. 풍산역은 기둥이 넷이고 999는 그중 둘에만 선다.
+#
+# GBIS 에는 그 호출이 있다(`getBusRouteStationListv2`). 게다가 **정류소 id 가 TAGO 와
+# 같은 번호다** — TAGO `GGB219000638` = GBIS `219000638`(2026-08-27, 기둥 5개 확인).
+# 갈아타는 것이 아니라 덧붙이는 것이다.
+#
+# 공공데이터포털 같은 키를 쓴다. 활용신청은 서비스마다 따로다(2026-08-27 승인).
+GBIS = "https://apis.data.go.kr/6410000"
+
+_gbis_routes = {}         # 노선번호 → [노선id, ...]
+_gbis_route_stops = {}    # 노선id → [정류소, ...]
+
+
+def gbis_get(path, params):
+    """GBIS 호출. 실패는 None, 결과 없음은 빈 dict.
+
+    **둘을 갈라야 한다.** 결과 없음을 실패로 읽으면 다음 노선 후보로 안 넘어가고,
+    실패를 결과 없음으로 읽으면 캐시에 빈 값이 박힌다.
+
+        resultCode 0   정상. `msgBody` 가 온다
+        resultCode 4   "결과가 존재하지 않습니다". **`msgBody` 자체가 없다**
+                       (2026-08-27 실측 — `위시티1,3단지` 로 물으면 이렇게 온다)
+    """
+    query = urllib.parse.urlencode({"serviceKey": TAGO_KEY, "format": "json", **params})
+    try:
+        with urllib.request.urlopen(f"{GBIS}/{path}?{query}", timeout=15,
+                                    context=outbound_tls()) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except Exception as error:                                  # noqa: BLE001
+        log(f"  GBIS {path} 실패: {error!r}")
+        return None
+    inner = body.get("response") or {}
+    code = str((inner.get("msgHeader") or {}).get("resultCode", ""))
+    if code == "4":
+        return {}
+    if code != "0":
+        log(f"  GBIS {path} resultCode={code}")
+        return None
+    return inner.get("msgBody") or {}
+
+
 # --- 서울 버스 실시간 도착 --------------------------------------------------
 #
 # **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을
