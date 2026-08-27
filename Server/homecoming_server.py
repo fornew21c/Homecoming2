@@ -1221,6 +1221,58 @@ def stops_named(stops, name):
             if want in name_key(stop["name"]) or name_key(stop["name"]) in want]
 
 
+def pick_leg_stops(stops, from_name, to_name):
+    """정류소 목록에서 승차·하차 후보를 고른다. 방향이 안 맞으면 None.
+
+    **순서가 방향이다.** 길 양쪽 기둥이 같은 노선인데 `seq` 가 다르다 —
+    풍산역 20753 은 13(신원중학교행), 58271 은 78(대화역행)이다(2026-08-27
+    실측). 승차가 하차보다 앞에 있는 쌍만 그 방향이다. **짐작이 아니라 순서로
+    정해진다.**
+
+    None 은 "이 노선이 아니다" 이고, 부르는 쪽이 다음 후보 노선으로 넘어간다.
+    """
+    boarding = stops_named(stops, from_name)
+    alighting = stops_named(stops, to_name)
+    pairs = [(b, a) for b in boarding for a in alighting if b["seq"] < a["seq"]]
+    if not pairs:
+        return None
+
+    def uniq(rows):
+        seen, out = set(), []
+        for row in rows:
+            if row["id"] not in seen:
+                seen.add(row["id"])
+                out.append(row)
+        return out
+
+    return {"boarding": uniq([b for b, _ in pairs]),
+            "alighting": uniq([a for _, a in pairs])}
+
+
+def bus_leg_stops(route_no, from_name, to_name):
+    """이름만으로 버스 구간의 승차·하차 정류소를 정한다. **좌표를 안 쓴다.**
+
+    돌려주는 것: `{"boarding": [...], "alighting": [...]}` — 못 찾으면 둘 다 빈
+    목록이다. **빈 것은 실패가 아니다.** `toName` 은 원래 표시용 자유 문구라
+    (`163번 대기` 같은 것도 들어간다) 못 찾는 것이 정상인 경우가 있다.
+    `points: []` 가 이미 "그릴 것이 없다" 로 쓰이는 것과 같은 계약이다.
+
+    **후보가 정확히 하나일 때만 확정이다.** 그 규칙은 부르는 쪽에 있다 —
+    여기서는 찾은 것을 그대로 준다.
+    """
+    empty = {"boarding": [], "alighting": []}
+    if not str(route_no or "").strip():
+        return empty
+    for route_id in gbis_route_ids(route_no):
+        stops = gbis_route_stops(route_id)
+        if not stops:
+            continue
+        picked = pick_leg_stops(stops, from_name, to_name)
+        if picked:
+            return picked
+    return empty
+
+
 # --- 서울 버스 실시간 도착 --------------------------------------------------
 #
 # **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을

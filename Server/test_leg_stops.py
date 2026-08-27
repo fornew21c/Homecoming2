@@ -197,5 +197,78 @@ class NameKeyTests(unittest.TestCase):
         self.assertFalse(hs.n_eq("풍산역", "마두역"))
 
 
+def stop(no, name, seq, sid=None):
+    return {"id": sid or f"GGB{no}", "no": no, "name": name,
+            "lat": 37.0, "lon": 127.0, "seq": seq}
+
+
+# 999 고양 방면 — 풍산역(20753) seq 13, 위시티1.3단지 seq 20.
+GOYANG_999 = [
+    stop("20572", "저동중고교", 11),
+    stop("58261", "밤가시7.8단지.광림교회", 12),
+    stop("20753", "풍산역", 13),
+    stop("20576", "애니골입구", 14),
+    stop("20795", "위시티1.3단지", 20),
+]
+
+# 반대 방향으로만 도는 노선 — 하차가 승차보다 앞이다.
+GOYANG_999_REVERSE = [
+    stop("20795", "위시티1.3단지", 60),
+    stop("58271", "풍산역", 78),
+]
+
+
+class BusLegStopsTests(unittest.TestCase):
+
+    def setUp(self):
+        hs._gbis_routes.clear()
+        hs._gbis_route_stops.clear()
+
+    def run_with(self, table, route_no, from_name, to_name):
+        """노선id → 정류소 목록. `gbis_route_ids` 는 그 키들을 순서대로 준다."""
+        ids = list(table)
+        patches = [
+            mock.patch.object(hs, "gbis_route_ids", lambda _no, _i=ids: _i),
+            mock.patch.object(hs, "gbis_route_stops", lambda rid: table[rid]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            return hs.bus_leg_stops(route_no, from_name, to_name)
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_승차와_하차를_집는다(self):
+        got = self.run_with({"218000111": GOYANG_999}, "999",
+                            "풍산역 버스정류장", "위시티1,3단지")
+        self.assertEqual([s["no"] for s in got["boarding"]], ["20753"])
+        self.assertEqual([s["no"] for s in got["alighting"]], ["20795"])
+
+    def test_반대_방향_기둥은_안_집는다(self):
+        # 58271 은 같은 999 인데 하차보다 뒤에 있다(seq 78 > 60). 그 방향이 아니다.
+        got = self.run_with({"218000111": GOYANG_999_REVERSE}, "999",
+                            "풍산역", "위시티1.3단지")
+        self.assertEqual(got, {"boarding": [], "alighting": []})
+
+    def test_두_이름이_다_있는_노선만_받는다(self):
+        # 999 는 고양과 수원에 있다. 수원 노선에는 이 이름이 없다.
+        suwon = [stop("11111", "수원역", 1), stop("22222", "영통", 2)]
+        got = self.run_with({"200000013": suwon, "218000111": GOYANG_999},
+                            "999", "풍산역", "위시티1.3단지")
+        self.assertEqual([s["no"] for s in got["boarding"]], ["20753"])
+
+    def test_후보가_여럿이면_다_준다(self):
+        many = [stop("20753", "풍산역", 13), stop("20486", "풍산역2번출구", 14),
+                stop("20795", "위시티1.3단지", 20)]
+        got = self.run_with({"218000111": many}, "999", "풍산", "위시티1.3단지")
+        self.assertEqual(sorted(s["no"] for s in got["boarding"]),
+                         ["20486", "20753"])
+
+    def test_못_찾으면_빈_목록이다_오류가_아니다(self):
+        got = self.run_with({"218000111": GOYANG_999}, "999", "163번 대기", "집")
+        self.assertEqual(got, {"boarding": [], "alighting": []})
+
+
 if __name__ == "__main__":
     unittest.main()
