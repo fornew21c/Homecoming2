@@ -637,5 +637,54 @@ class NextStopLabelTests(unittest.TestCase):
         self.assertIsNone(hs.next_stop_name([], "20753"))
 
 
+class GbisSingleRowTests(unittest.TestCase):
+    """**결과가 하나면 목록이 아니라 dict 로 온다.**
+
+    2026-08-27 실측 — `keyword=999` 는 `busRouteList` 가 list(셋)인데
+    `keyword=271` 은 dict 하나다(경기도 이천시 노선). 그대로 `for` 로 돌면
+    **키 문자열**이 나와서 `row.get` 이 터진다.
+
+    실제로 `/stops?q=…&route=271` 이 500 을 냈다 —
+    `'str' object has no attribute 'get'`. 이 파일의 `new_style_get` 은 같은
+    함정을 이미 막고 있었는데(`rows if isinstance(rows, list) else [rows]`)
+    GBIS 쪽 셋에서 빠뜨렸다.
+
+    **이름 검색·노선 찾기·경유정류소 셋 다 같은 모양이다.**
+    """
+
+    def setUp(self):
+        hs._gbis_routes.clear()
+        hs._gbis_route_stops.clear()
+
+    ONE_ROUTE = {"busRouteList": {"routeId": 233000019, "routeName": 271}}
+    ONE_STOP_ON_ROUTE = {"busRouteStationList": {
+        "stationSeq": 1, "stationId": 219000638, "mobileNo": "20753",
+        "stationName": "풍산역", "y": "37.67315", "x": "126.78722"}}
+    ONE_NAMED = {"busStationList": {
+        "stationId": 219000638, "mobileNo": "20753", "stationName": "풍산역",
+        "y": "37.67315", "x": "126.78722"}}
+
+    def test_노선_찾기가_하나여도_된다(self):
+        with mock.patch.object(hs, "gbis_get", lambda _p, _q: self.ONE_ROUTE):
+            self.assertEqual(hs.gbis_route_ids("271"), ["233000019"])
+
+    def test_경유정류소가_하나여도_된다(self):
+        with mock.patch.object(hs, "gbis_get", lambda _p, _q: self.ONE_STOP_ON_ROUTE):
+            got = hs.gbis_route_stops("233000019")
+        self.assertEqual([s["no"] for s in got], ["20753"])
+
+    def test_이름_검색이_하나여도_된다(self):
+        with mock.patch.object(hs, "gbis_get", lambda _p, _q: self.ONE_NAMED):
+            got = hs.gbis_stops_named("풍산역")
+        self.assertEqual([s["ars"] for s in got], ["20753"])
+
+    def test_봉투가_문자열이어도_안_터진다(self):
+        # `comMsgHeader` 가 늘 빈 문자열로 온다. 다른 자리도 그럴 수 있다.
+        for junk in ("", "빈값", None):
+            with mock.patch.object(hs, "gbis_get", lambda _p, _q, j=junk: {"busRouteList": j}):
+                self.assertEqual(hs.gbis_route_ids("x"), [])
+            hs._gbis_routes.clear()
+
+
 if __name__ == "__main__":
     unittest.main()

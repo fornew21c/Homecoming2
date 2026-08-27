@@ -1146,6 +1146,24 @@ def gbis_get(path, params):
     return inner.get("msgBody") or {}
 
 
+def gbis_rows(body, key):
+    """GBIS 응답의 목록 하나를 **항상 list 로** 꺼낸다.
+
+    **결과가 하나면 목록이 아니라 dict 로 온다.** 2026-08-27 실측 —
+    `keyword=999` 는 `busRouteList` 가 list(셋)인데 `keyword=271` 은 dict
+    하나다(경기도 이천시). 그대로 `for` 로 돌면 **키 문자열**이 나와서
+    `row.get` 이 터진다. 실제로 `/stops?…&route=271` 이 500 을 냈다.
+
+    `new_style_get` 이 같은 함정을 이미 막고 있다 — 여기도 같은 자를 쓴다.
+    문자열이나 None 이 와도 빈 목록이 된다(`comMsgHeader` 가 늘 빈 문자열이라
+    다른 자리도 그럴 수 있다).
+    """
+    rows = (body or {}).get(key)
+    if isinstance(rows, dict):
+        return [rows]
+    return rows if isinstance(rows, list) else []
+
+
 def gbis_route_ids(route_no):
     """그 번호를 쓰는 경기도 노선 id 들. 순서는 자료가 준 그대로.
 
@@ -1163,7 +1181,7 @@ def gbis_route_ids(route_no):
     body = gbis_get("busrouteservice/v2/getBusRouteListv2", {"keyword": key})
     if body is None:
         return []                  # **실패는 캐시하지 않는다.** 다음에 다시 묻는다
-    ids = [str(row["routeId"]) for row in body.get("busRouteList") or []
+    ids = [str(row["routeId"]) for row in gbis_rows(body, "busRouteList")
            if row.get("routeId") and str(row.get("routeName") or "").strip() == key]
     _gbis_routes[key] = ids
     return ids
@@ -1189,7 +1207,7 @@ def gbis_route_stops(route_id):
     if body is None:
         return []                  # 실패는 캐시하지 않는다
     stops = []
-    for row in body.get("busRouteStationList") or []:
+    for row in gbis_rows(body, "busRouteStationList"):
         # **줄 하나가 망가졌다고 노선을 버리지 않는다.** 다만 조용히 채우지도
         # 않는다 — 좌표가 없는 정류소는 후보가 될 수 없으므로 빼는 것이 맞다.
         try:
@@ -1724,7 +1742,7 @@ def gbis_stops_named(text, limit=8):
     if not body:
         return []                        # 실패도 결과 없음도 여기서는 같다
     out = []
-    for row in body.get("busStationList") or []:
+    for row in gbis_rows(body, "busStationList"):
         try:
             out.append({"name": row["stationName"],
                         "lat": float(row["y"]), "lon": float(row["x"]),
