@@ -1157,6 +1157,45 @@ def gbis_route_ids(route_no):
     return ids
 
 
+def gbis_route_stops(route_id):
+    """그 노선의 경유정류소 — 순서대로, 기둥 단위로, 좌표까지.
+
+    돌려주는 것: `[{"id", "no", "name", "lat", "lon", "seq"}, ...]`
+
+    **`id` 에 `GGB` 를 붙인다.** 저장된 경로와 도착 조회가 TAGO id 를 쓰는데,
+    TAGO `GGB219000638` 과 GBIS `219000638` 이 같은 번호다(2026-08-27, 기둥
+    5개 확인). 같은 모양으로 맞춰 두면 뒤에서 견줄 수 있다.
+
+    999(218000111)는 92개가 `stationSeq` 1~92 로 온다. **같은 정류소가 두 번
+    나오는 노선은 없었다** — 999 · 7770 · 7780 · 7790 등 7개에서 중복 0개
+    (2026-08-27). 그래서 `seq` 로 방향을 가려도 무너지지 않는다.
+    """
+    key = str(route_id)
+    if key in _gbis_route_stops:
+        return _gbis_route_stops[key]
+    body = gbis_get("busrouteservice/v2/getBusRouteStationListv2", {"routeId": key})
+    if body is None:
+        return []                  # 실패는 캐시하지 않는다
+    stops = []
+    for row in body.get("busRouteStationList") or []:
+        # **줄 하나가 망가졌다고 노선을 버리지 않는다.** 다만 조용히 채우지도
+        # 않는다 — 좌표가 없는 정류소는 후보가 될 수 없으므로 빼는 것이 맞다.
+        try:
+            stops.append({
+                "id": f"GGB{row['stationId']}",
+                "no": str(row.get("mobileNo") or "").strip() or None,
+                "name": row["stationName"],
+                "lat": float(row["y"]),
+                "lon": float(row["x"]),
+                "seq": int(row["stationSeq"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    stops.sort(key=lambda stop: stop["seq"])
+    _gbis_route_stops[key] = stops
+    return stops
+
+
 # --- 서울 버스 실시간 도착 --------------------------------------------------
 #
 # **TAGO 에는 서울이 없다.** 도시코드 목록에 서울이 아예 없고, 좌표로 정류장을

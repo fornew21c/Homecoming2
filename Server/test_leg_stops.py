@@ -100,5 +100,56 @@ class GbisRouteIdsTests(unittest.TestCase):
         self.assertEqual(len(calls), 2, "실패한 조회는 다음에 다시 물어야 한다")
 
 
+class GbisRouteStopsTests(unittest.TestCase):
+
+    def setUp(self):
+        hs._gbis_route_stops.clear()
+
+    def test_순서대로_좌표까지_준다(self):
+        body = {"busRouteStationList": [
+            {"stationSeq": 14, "stationId": 219000605, "mobileNo": " 20576",
+             "stationName": "애니골입구", "y": "37.67435", "x": "126.7919667"},
+            {"stationSeq": 13, "stationId": 219000638, "mobileNo": " 20753",
+             "stationName": "풍산역", "y": "37.67315", "x": "126.7872167"},
+        ]}
+        with mock.patch.object(hs, "gbis_get", lambda _p, _q: body):
+            stops = hs.gbis_route_stops("218000111")
+        self.assertEqual([s["seq"] for s in stops], [13, 14])
+        self.assertEqual(stops[0], {"id": "GGB219000638", "no": "20753",
+                                    "name": "풍산역", "lat": 37.67315,
+                                    "lon": 126.7872167, "seq": 13})
+
+    def test_id_는_TAGO_와_같은_모양이다(self):
+        # TAGO 는 GGB219000638, GBIS 는 219000638 — 같은 번호다(2026-08-27 확인).
+        body = {"busRouteStationList": [
+            {"stationSeq": 1, "stationId": 219000638, "mobileNo": "20753",
+             "stationName": "풍산역", "y": "37.67315", "x": "126.78722"},
+        ]}
+        with mock.patch.object(hs, "gbis_get", lambda _p, _q: body):
+            self.assertEqual(hs.gbis_route_stops("x")[0]["id"], "GGB219000638")
+
+    def test_망가진_줄은_건너뛴다(self):
+        body = {"busRouteStationList": [
+            {"stationSeq": 1, "stationId": 219000638, "stationName": "풍산역",
+             "y": "37.67315", "x": "126.78722"},
+            {"stationSeq": 2, "stationId": 219000605, "stationName": "좌표없음"},
+        ]}
+        with mock.patch.object(hs, "gbis_get", lambda _p, _q: body):
+            stops = hs.gbis_route_stops("x")
+        self.assertEqual([s["name"] for s in stops], ["풍산역"])
+
+    def test_한_번_찾은_것은_다시_묻지_않는다(self):
+        calls = []
+
+        def get(_p, _q):
+            calls.append(1)
+            return {"busRouteStationList": []}
+
+        with mock.patch.object(hs, "gbis_get", get):
+            hs.gbis_route_stops("x")
+            hs.gbis_route_stops("x")
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
