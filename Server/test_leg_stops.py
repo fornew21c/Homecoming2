@@ -270,5 +270,55 @@ class BusLegStopsTests(unittest.TestCase):
         self.assertEqual(got, {"boarding": [], "alighting": []})
 
 
+class SeoulLegStopsTests(unittest.TestCase):
+
+    # `seoul-stops.json` 의 한 줄 모양: [이름, 위도, 경도, arsId]
+    STOPS_TABLE = [
+        ["국회의사당역.KB국민은행", 37.528491, 126.918087, "19003"],
+        ["신촌로터리", 37.555000, 126.936000, "14204"],
+        ["엉뚱한곳", 37.400000, 127.000000, "99999"],
+    ]
+
+    def items(self, rows):
+        """TOPIS 응답 항목을 (arsId, staOrd) 로 흉내낸다.
+
+        **XML 조각 문자열이다.** `seoul_arrival_items` 가 `<itemList>` 안쪽을
+        정규식으로 잘라 문자열 목록을 주고, `_tag` 가 다시 정규식으로 읽는다.
+        """
+        return [f"<arsId>{ars}</arsId><staOrd>{order}</staOrd>"
+                for ars, order in rows]
+
+    def run_with(self, rows, from_name, to_name):
+        patches = [
+            mock.patch.object(hs, "SEOUL_STOPS", self.STOPS_TABLE),
+            mock.patch.object(hs, "seoul_routes", lambda: {"163": ["100100032"]}),
+            mock.patch.object(hs, "seoul_arrival_items_cached",
+                              lambda _rid, _at: self.items(rows)),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            return hs.seoul_leg_stops("163", from_name, to_name)
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_승차와_하차를_집는다(self):
+        got = self.run_with([("19003", 5), ("14204", 12), ("99999", 30)],
+                            "국회의사당역.KB국민은행", "신촌로터리")
+        self.assertEqual([s["no"] for s in got["boarding"]], ["19003"])
+        self.assertEqual([s["no"] for s in got["alighting"]], ["14204"])
+
+    def test_방향이_뒤집히면_안_집는다(self):
+        got = self.run_with([("14204", 5), ("19003", 12)],
+                            "국회의사당역.KB국민은행", "신촌로터리")
+        self.assertEqual(got, {"boarding": [], "alighting": []})
+
+    def test_목록이_비면_빈_결과다_오류가_아니다(self):
+        # 차가 안 다니는 시간에 도착정보가 빌 수 있다(계획 Task 8 에서 실측한다).
+        got = self.run_with([], "국회의사당역.KB국민은행", "신촌로터리")
+        self.assertEqual(got, {"boarding": [], "alighting": []})
+
+
 if __name__ == "__main__":
     unittest.main()

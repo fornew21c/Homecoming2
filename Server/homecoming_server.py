@@ -1411,6 +1411,45 @@ def seoul_bus_arrival(lat, lon, route_no, now=None):
     return None
 
 
+def seoul_leg_stops(route_no, from_name, to_name):
+    """서울 노선의 승차·하차 정류장. `bus_leg_stops` 와 **같은 모양**을 돌려준다.
+
+    **정류장 목록을 도착정보 호출에서 얻는다.** 경기(`getBusRouteStationListv2`)와
+    성격이 다르다 — 그쪽은 시간과 무관한 노선 자료인데, 이쪽은 지금 오는 차를
+    묻는 김에 정류장이 딸려 오는 것이다. 차가 안 다니는 시간에 비는지는 실측으로
+    확인했다(아래 주석). 비면 그 시간대에 후보를 못 주고, 그건 빈 결과이지 틀린
+    값이 아니다.
+
+    `staOrd` 가 경기의 `seq` 와 같은 자리를 한다 — 노선 안에서의 순서다.
+    """
+    empty = {"boarding": [], "alighting": []}
+    want = str(route_no or "").strip()
+    if not want:
+        return empty
+    at = datetime.now(timezone.utc)
+    index = {row[3]: row for row in SEOUL_STOPS if len(row) > 3 and row[3]}
+    for route_id in seoul_routes().get(want) or []:
+        stops = []
+        for item in seoul_arrival_items_cached(route_id, at):
+            ars = _tag(item, "arsId")
+            row = index.get(ars)
+            if not row:
+                continue
+            try:
+                seq = int(_tag(item, "staOrd"))
+            except ValueError:
+                continue
+            stops.append({"id": ars, "no": ars, "name": row[0],
+                          "lat": row[1], "lon": row[2], "seq": seq})
+        if not stops:
+            continue
+        stops.sort(key=lambda stop: stop["seq"])
+        picked = pick_leg_stops(stops, from_name, to_name)
+        if picked:
+            return picked
+    return empty
+
+
 def bus_arrival(lat, lon, route_no, now=None):
     """그 자리에서 탈 `route_no` 버스가 언제 오는가. 모르면 None.
 
