@@ -509,6 +509,28 @@ class StaleArrivalTests(unittest.TestCase):
             hs.arrival_ready(LEGS, 3300, now=NOW)
         self.assertEqual(len(started), 1)
 
+    def test_빈손도_이유를_말한다(self):
+        """**이 자리가 가장 오래 조용했다.** 구간도 좌표도 창도 멀쩡하고 값만
+        빈손인 경우는 `arrival_says` 의 세 갈래 어디에도 안 걸린다."""
+        key = ("999", 37.673130, 126.787047)
+        hs._arrival_ready[key] = (NOW, None)
+        said = []
+        hs._arrival_silence = None
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *a, **k: None), \
+             mock.patch.object(hs, "log", lambda *parts: said.append(" ".join(map(str, parts)))):
+            self.assertIsNone(hs.arrival_ready(LEGS, 3300, now=NOW))
+        self.assertTrue(any("빈손" in line for line in said),
+                        f"이유를 안 말했다: {said}")
+
+    def test_아직_안_물었으면_그렇게_말한다(self):
+        said = []
+        hs._arrival_silence = None
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *a, **k: None), \
+             mock.patch.object(hs, "log", lambda *parts: said.append(" ".join(map(str, parts)))):
+            self.assertIsNone(hs.arrival_ready(LEGS, 3300, now=NOW))
+        self.assertTrue(any("배경이 채우는 중" in line for line in said),
+                        f"이유를 안 말했다: {said}")
+
     def test_아무것도_못_주면_이유를_말한다(self):
         """**이 길만 조용했다.** 칩이 왜 없는지 말하게 해 뒀는데(2026-08-27)
         `gone` 은 세 갈래를 안 거치고 빠져나가서, 정작 실주행에서 사라진 그
@@ -568,6 +590,51 @@ class RefreshThreadTests(unittest.TestCase):
         self.assertEqual(hs._arrival_ready[key][1], value)
         # 다 끝났으면 진행 중 표시를 지운다.
         self.assertNotIn(key, hs._arrival_refreshing)
+
+    def test_빈손이_아직_참인_값을_안_지운다(self):
+        """**빈손은 증거가 아니다.**
+
+        `tago_arrival_rows` 는 호출이 실패해도 빈 목록을 준다 — "그 버스가 안
+        온다" 와 "물어보지 못했다" 가 같은 `None` 이다. 그 `None` 이 아직 안 지난
+        값을 덮으면, 정류장에 서 있는 사람의 칩이 조회 한 번 실패로 사라진다.
+        """
+        # **실제 시계로 잰다.** `fill` 은 배경 스레드라 `now` 를 못 받는다 —
+        # 고정된 `NOW` 로 쓰면 그 값이 이미 과거라 "아직 안 지난" 이 성립하지 않는다.
+        real = hs.now()
+        key = ("999", 37.673130, 126.787047)
+        good = {"no": "999", "at": real + datetime.timedelta(minutes=6),
+                "stops": 5, "measuredAt": real}
+        hs._arrival_ready[key] = (real - datetime.timedelta(minutes=1), good)
+        with mock.patch.object(hs, "bus_arrival", lambda *a, **k: None):
+            hs.start_arrival_refresh("999", 37.673130, 126.787047)
+            end = time.monotonic() + 2.0
+            while key in hs._arrival_refreshing and time.monotonic() < end:
+                time.sleep(0.01)
+        self.assertEqual(hs._arrival_ready[key][1], good,
+                         "빈손이 아직 참인 값을 지웠다")
+
+    def test_빈손이_지나간_값은_지운다(self):
+        """지나간 값은 지켜 줄 것이 없다. `gone` 이 어차피 걷어낸다."""
+        real = hs.now()
+        key = ("999", 37.673130, 126.787047)
+        old = {"no": "999", "at": real - datetime.timedelta(minutes=10),
+               "stops": 0, "measuredAt": real}
+        hs._arrival_ready[key] = (real - datetime.timedelta(minutes=11), old)
+        with mock.patch.object(hs, "bus_arrival", lambda *a, **k: None):
+            hs.start_arrival_refresh("999", 37.673130, 126.787047)
+            end = time.monotonic() + 2.0
+            while key in hs._arrival_refreshing and time.monotonic() < end:
+                time.sleep(0.01)
+        self.assertIsNone(hs._arrival_ready[key][1])
+
+    def test_빈손이어도_값이_없었으면_그대로_써넣는다(self):
+        """처음부터 없던 자리다. 지킬 값이 없으니 캐시 시각이 갱신돼야
+        30초 캐시가 제 몫을 한다."""
+        key = ("999", 37.673130, 126.787047)
+        with mock.patch.object(hs, "bus_arrival", lambda *a, **k: None):
+            hs.start_arrival_refresh("999", 37.673130, 126.787047)
+            self.assertTrue(self._wait(key), "빈손을 안 써넣었다")
+        self.assertIsNone(hs._arrival_ready[key][1])
 
     def test_터져도_진행중_표시를_지운다(self):
         """안 지우면 그 노선은 이 프로세스가 사는 동안 영영 갱신이 막힌다."""

@@ -2808,7 +2808,27 @@ def start_arrival_refresh(route_no, lat, lon):
     def fill():
         try:
             value = bus_arrival(lat, lon, route_no)
-            _arrival_ready[key] = (datetime.now(timezone.utc), value)
+            at = datetime.now(timezone.utc)
+            # **빈손은 증거가 아니다.** `tago_arrival_rows` 는 호출이 실패해도 빈
+            # 목록을 준다(그쪽의 의도된 계약이다) — 그래서 "그 버스가 안 온다" 와
+            # "물어보지 못했다" 가 여기서는 같은 `None` 이다.
+            #
+            # 그 `None` 을 그대로 써 넣으면 **아직 참인 값이 지워진다.** 1분 전에
+            # `999 · 19:04 도착` 을 쟀는데 조회가 한 번 실패하면 화면에서 칩이
+            # 사라졌다. 2026-08-27 실주행에서 정류장에 서 있는 동안 칩이 사라진
+            # 길이 이것일 수 있다 — `gone` 과 증상이 같고, 둘 다 조용했다.
+            #
+            # **갱신이 실패한 것과 갱신이 아직 안 온 것은 같아야 한다.** 안 왔을
+            # 때는 이미 옛 값을 그대로 쓴다(`arrival_ready` 의 "낡았어도 아직 안
+            # 지났으면 준다"). 빈손도 그와 같이 다룬다 — 지나가면 `gone` 이
+            # 알아서 걷어낸다.
+            previous = _arrival_ready.get(key)
+            if (value is None and previous and previous[1]
+                    and previous[1]["at"] > at):
+                log(f"  버스 {route_no} 도착 조회가 빈손 — "
+                    f"아직 안 지난 값({iso(previous[1]['at'])})을 그대로 둔다")
+                return
+            _arrival_ready[key] = (at, value)
         except Exception as error:                          # noqa: BLE001
             log(f"  버스 도착 배경 갱신 실패: {error!r}")
         finally:
@@ -2907,13 +2927,21 @@ def arrival_ready(legs, progress, now=None, lat=None, lon=None):
     gone = value is not None and value["at"] < at
     if gone:
         value = promoted_second_bus(value, at)
-        if value is None:
-            arrival_says(legs, progress,
-                         f"{leg['busNo']}번 앞차가 지났고 그다음 차를 모른다")
     elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+        if value is None:
+            # **여기가 조용했다.** 칩이 왜 없는지 말하게 해 뒀는데(2026-08-27)
+            # 위의 세 갈래는 전부 `leg` 를 못 고른 경우다. 구간도 좌표도 창도
+            # 멀쩡한데 값만 빈손인 이 자리는 아무 말도 안 하고 빠져나갔다.
+            arrival_says(legs, progress,
+                         f"{leg['busNo']}번 도착 조회가 빈손이었다 — "
+                         "그 정류장에 안 오거나 조회가 실패했다")
         return value
 
     start_arrival_refresh(leg["busNo"], lat, lon)
+    if value is None:
+        arrival_says(legs, progress,
+                     f"{leg['busNo']}번 앞차가 지났고 그다음 차를 모른다" if gone
+                     else f"{leg['busNo']}번 도착값이 아직 없다 — 배경이 채우는 중")
     return value
 
 
