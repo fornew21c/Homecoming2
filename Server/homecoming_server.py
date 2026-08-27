@@ -2616,6 +2616,28 @@ def start_arrival_refresh(route_no, lat, lon):
     threading.Thread(target=fill, daemon=True).start()
 
 
+# 마지막으로 찍은 "칩이 왜 없나". 같은 이유를 위치 보고마다 되풀이하지 않는다.
+_arrival_silence = None
+
+
+def arrival_says(legs, progress, why):
+    """**칩이 안 뜨는 이유를 말한다.** 언제나 None 을 돌려준다.
+
+    안 뜨는 것 자체는 정상일 때가 많다 — 승차가 아직 멀거나, 서울 시내버스라
+    자료가 없거나. 문제는 **정상과 고장이 화면에서 똑같이 보인다**는 것이다.
+    2026-08-27 에 실제로 그랬다: 칩이 안 뜨는데 로그에 한 마디도 없어서, 번호가
+    비었는지 창 밖인지 진행도가 튄 것인지 가릴 수가 없었다.
+
+    이유가 바뀔 때만 찍는다. 위치 보고마다 같은 줄을 남기면 로그가 못 쓰게 된다.
+    """
+    global _arrival_silence
+    if why != _arrival_silence:
+        _arrival_silence = why
+        log(f"  버스 도착 없음 — {why} (진행 {int(progress)}초 · "
+            f"구간 {leg_index_at(legs, progress)}/{len(legs)})")
+    return None
+
+
 def arrival_ready(legs, progress, now=None, lat=None, lon=None):
     """다음 버스의 도착값 — **캐시에 있는 것만.** 없으면 None 이고 배경에서 채운다.
 
@@ -2628,14 +2650,19 @@ def arrival_ready(legs, progress, now=None, lat=None, lon=None):
     at = now or datetime.now(timezone.utc)
     leg = next_bus_leg(legs, progress, lat, lon)
     if not leg:
-        return None
+        return arrival_says(legs, progress,
+                            "앞에 탈 버스 구간이 없다 — 번호가 비었거나 이미 지났다")
+    left = leg["startsAt"] - progress
     # 창은 **아직 안 탔을 때만** 잰다. 이미 승차 시각을 지나 기다리는 중이면
     # `left` 가 음수이고, 그건 창 안이다.
-    if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
-        return None
+    if left > ARRIVAL_LEAD_SECONDS:
+        return arrival_says(legs, progress,
+                            f"{leg['busNo']}번 승차까지 {int(left)}초 — "
+                            f"창 {ARRIVAL_LEAD_SECONDS}초 밖이라 안 묻는다")
     points = leg.get("points") or []
     if not points:
-        return None
+        return arrival_says(legs, progress,
+                            f"{leg['busNo']}번 구간에 좌표가 없다 — 승차 지점을 모른다")
     lat, lon = points[0][0], points[0][1]
     key = (str(leg["busNo"]), lat, lon)
     cached = _arrival_ready.get(key)

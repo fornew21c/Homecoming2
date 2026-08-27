@@ -705,10 +705,18 @@ extension HomecomingAttributes.ContentState {
         return Date().timeIntervalSince(measured) < 60
     }
 
-    /// "2정류장 전". 낡았거나 모르면 nil.
+    /// "2정류장 전". 코앞이면 "곧 도착". 낡았거나 모르면 nil.
+    ///
+    /// **0 은 "없음" 이 아니다.** 그 정류장에 지금 닿고 있다는 뜻이고, 자료도
+    /// 그때 그렇게 말한다 — 2026-08-27 실측에서 163번이
+    /// `staOrd 60 − sectOrd1 60 = 0` 이고 `arrmsg1` 이 `곧 도착` 이었다.
+    ///
+    /// 예전에는 `stops > 0` 이라 **가장 중요한 순간에만 숫자가 사라졌다.**
+    /// 버스가 멀면 `5정류장 전` 이 뜨고 코앞에 오면 없어졌다 — 뛸지 말지를
+    /// 정해야 하는 바로 그 순간이다.
     var busArrivalStopsText: String? {
-        guard busArrivalStopsFresh, let stops = busArrivalStops, stops > 0 else { return nil }
-        return "\(stops)정류장 전"
+        guard busArrivalStopsFresh, let stops = busArrivalStops, stops >= 0 else { return nil }
+        return stops == 0 ? "곧 도착" : "\(stops)정류장 전"
     }
 
     /// 그다음 차의 시각만. "16:14"
@@ -716,10 +724,10 @@ extension HomecomingAttributes.ContentState {
         busArrivalThenAt.map { Self.clockFormatter.string(from: $0) }
     }
 
-    /// 그다음 차의 "11정류장 전". 낡았거나 모르면 nil.
+    /// 그다음 차의 "11정류장 전". `busArrivalStopsText` 와 같은 규칙이다.
     var busArrivalThenStopsText: String? {
-        guard busArrivalStopsFresh, let stops = busArrivalThenStops, stops > 0 else { return nil }
-        return "\(stops)정류장 전"
+        guard busArrivalStopsFresh, let stops = busArrivalThenStops, stops >= 0 else { return nil }
+        return stops == 0 ? "곧 도착" : "\(stops)정류장 전"
     }
 
     /// "16:14 · 11정류장 전". 한 줄로 쓰는 자리(잠금화면)용. 없으면 nil.
