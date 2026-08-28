@@ -2923,6 +2923,37 @@ def arrival_recently_measured(route_no, lat, lon, at):
     return (at - measured).total_seconds() < ARRIVAL_BURST_SECONDS, value
 
 
+def refresh_leg_arrivals(leg):
+    """그 구간의 노선을 **전부** 지금 당장 새로 묻는다. 돌려주는 것은 없다.
+
+    **`arrival_ready` 와 다르다.** 그쪽은 캐시에 있는 것만 쓰고 기다리지 않는다.
+    이쪽은 사람이 새로고침을 눌렀거나 화면이 30초마다 부르는 자리라 기다려도 된다.
+
+    2026-08-28 실측에서 드러난 자리다 — 칩은 두 노선을 합쳐 보여 주는데 이 길이
+    `busNo` 하나만 새로 물어서 **6713 만 뒤처졌다.** 값이 틀리지는 않았지만
+    한쪽만 신선했다.
+
+    방금 잰 노선은 건너뛴다(`ARRIVAL_BURST_SECONDS`). 몰아 눌러도 한도를 노선
+    수만큼 곱해 태우지 않는다.
+    """
+    points = (leg or {}).get("points") or []
+    if not points:
+        return
+    lat, lon = points[0][0], points[0][1]
+    for number in leg_route_numbers(leg):
+        burst, _ = arrival_recently_measured(number, lat, lon, now())
+        if burst:
+            log(f"  버스 {number} 도착 새로고침 건너뜀 — "
+                f"{ARRIVAL_BURST_SECONDS}초 안에 이미 물었다")
+            continue
+        # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
+        _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
+        value = bus_arrival(lat, lon, number)
+        _arrival_ready[(number, lat, lon)] = (now(), value)
+        log(f"  버스 {number} 도착 새로고침 → "
+            f"{iso(value['at']) if value else '없음'}")
+
+
 def merge_arrivals(values):
     """여러 노선의 도착값을 **노선 상관없이 빠른 순 두 대**로 합친다.
 
@@ -4127,22 +4158,7 @@ class Handler(BaseHTTPRequestHandler):
         route = route_of(session)
         leg = next_bus_leg(route["legs"], session["route_progress"] or 0,
                            session["last_lat"], session["last_lon"]) if route else None
-        points = (leg or {}).get("points") or []
-        if leg and points:
-            lat, lon = points[0][0], points[0][1]
-            burst, value = arrival_recently_measured(leg["busNo"], lat, lon, now())
-            if burst:
-                # 몰아 부른 것이다. 방금 잰 값을 그대로 쓴다 — 다시 물어도 같은
-                # 값이 오고, 공공데이터 한도만 태운다.
-                log(f"  버스 {leg['busNo']} 도착 새로고침 건너뜀 — "
-                    f"{ARRIVAL_BURST_SECONDS}초 안에 이미 물었다")
-            else:
-                # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
-                _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
-                value = bus_arrival(lat, lon, leg["busNo"])
-                _arrival_ready[(str(leg["busNo"]), lat, lon)] = (now(), value)
-                log(f"  버스 {leg['busNo']} 도착 새로고침 → "
-                    f"{iso(value['at']) if value else '없음'}")
+        refresh_leg_arrivals(leg)
 
         return self.reply(200, {"ok": True, "state": content_state(session)})
 

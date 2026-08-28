@@ -177,5 +177,58 @@ class ThenNoWireTests(unittest.TestCase):
         self.assertNotIn("busArrivalThenNo", state)
 
 
+class RefreshAllRoutesTests(unittest.TestCase):
+    """**새로고침도 노선을 전부 묻는다.**
+
+    2026-08-28 실측에서 드러났다 — 칩은 두 노선을 합쳐 보여 주는데
+    `↻`/30초 타이머가 타는 길은 `busNo` 하나만 새로 물었다. 그래서 6713 은
+    배경 갱신에만 기대게 되고, 163 만 신선해진다.
+
+    `refresh_leg_arrivals` 가 그 자리를 대신한다. 부르는 쪽(핸들러)은 세션에서
+    구간을 찾는 일만 한다.
+    """
+
+    LEG = {"mode": "bus", "busNo": "163", "busNos": ["163", "6713"],
+           "startsAt": 240, "seconds": 900, "points": [[37.528491, 126.918087]]}
+
+    def setUp(self):
+        hs._arrival_ready.clear()
+        hs._arrival_rows.clear()
+
+    def test_노선을_전부_새로_묻는다(self):
+        asked = []
+
+        def fake(lat, lon, no, now=None):
+            asked.append(no)
+            return value(no, 5, 2)
+
+        with mock.patch.object(hs, "bus_arrival", fake), \
+             mock.patch.object(hs, "arrival_stop", lambda *_a, **_k: None):
+            hs.refresh_leg_arrivals(self.LEG)
+        self.assertEqual(sorted(asked), ["163", "6713"])
+
+    def test_방금_잰_노선은_건너뛴다(self):
+        # 몰아 눌러도 한도를 네 배로 태우지 않는다.
+        hs._arrival_ready[("163", 37.528491, 126.918087)] = (hs.now(), value("163", 5, 2))
+        asked = []
+
+        def fake(lat, lon, no, now=None):
+            asked.append(no)
+            return value(no, 5, 2)
+
+        with mock.patch.object(hs, "bus_arrival", fake), \
+             mock.patch.object(hs, "arrival_stop", lambda *_a, **_k: None):
+            hs.refresh_leg_arrivals(self.LEG)
+        self.assertEqual(asked, ["6713"])
+
+    def test_좌표가_없으면_아무것도_안_한다(self):
+        asked = []
+        with mock.patch.object(hs, "bus_arrival",
+                               lambda *_a, **_k: asked.append(1)):
+            hs.refresh_leg_arrivals({"mode": "bus", "busNos": ["163"], "points": []})
+            hs.refresh_leg_arrivals(None)
+        self.assertEqual(asked, [])
+
+
 if __name__ == "__main__":
     unittest.main()
