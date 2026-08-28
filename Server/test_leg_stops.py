@@ -826,5 +826,51 @@ class ArrivalReasonTests(unittest.TestCase):
         self.assertIsNone(why)
 
 
+class ArrivalPendingTests(unittest.TestCase):
+    """**창은 열렸는데 자료가 아직 없을 때를 말한다.**
+
+    칩이 없는 것이 화면에서 세 가지로 똑같이 보였다 — 승차가 아직 멀다(정상),
+    버스가 아직 안 잡혔다(정상), 고장. 사용자가 두 번 다 "왜 안 뜨지" 로 읽었다.
+
+    2026-08-27 실귀가 — 18:17 에 창(15분)이 열렸는데 999 칩은 18:27:39 에야 떴다.
+    실시간 도착정보는 차가 11~17정류장 안에 들어와야 나온다(실측: 999 첫차 17분
+    뒤가 가장 먼 값이고 둘째 차는 아예 없다). 그 10분이 "자료가 아직 없는" 시간이다.
+    """
+
+    LEGS = [
+        {"mode": "walk", "startsAt": 0, "seconds": 240, "points": [[37.5, 127.0]]},
+        {"mode": "bus", "busNo": "999", "startsAt": 240, "seconds": 900,
+         "points": [[37.673180, 126.787167]]},
+    ]
+
+    def ready(self, progress, cached):
+        hs._arrival_ready.clear()
+        if cached is not None:
+            hs._arrival_ready[("999", 37.673180, 126.787167)] = (hs.now(), cached)
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *_a: None):
+            return hs.arrival_pending(self.LEGS, progress)
+
+    def test_창_안인데_값이_없으면_기다리는_중이다(self):
+        self.assertEqual(self.ready(0, None), "999")
+
+    def test_값이_있으면_기다리는_중이_아니다(self):
+        from datetime import timedelta
+        self.assertIsNone(
+            self.ready(0, {"no": "999", "at": hs.now() + timedelta(minutes=5)}))
+
+    def test_창_밖이면_기다리는_중이_아니다(self):
+        # 승차까지 아직 멀다. 그건 정상이고 화면에 적을 것이 없다.
+        legs = [dict(self.LEGS[0]), dict(self.LEGS[1])]
+        legs[1]["startsAt"] = 5000
+        hs._arrival_ready.clear()
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *_a: None):
+            self.assertIsNone(hs.arrival_pending(legs, 0))
+
+    def test_버스_구간이_없으면_없다(self):
+        walk_only = [{"mode": "walk", "startsAt": 0, "seconds": 240,
+                      "points": [[37.5, 127.0]]}]
+        self.assertIsNone(hs.arrival_pending(walk_only, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

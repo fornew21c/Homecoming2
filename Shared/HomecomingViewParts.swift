@@ -297,6 +297,29 @@ struct RouteStripView: View {
     /// 곁들이다 — 그래서 크기와 굵기가 그 순서다.
     @ViewBuilder
     private var busArrivalChip: some View {
+        // **번호만 오고 시각이 없을 때가 있다.** 승차 15분 창은 열렸는데 실시간
+        // 도착정보에 그 차가 아직 안 잡힌 시간이다. 시각 칸을 비운 채로 표를
+        // 그리면 "고장" 으로 읽히므로, 그때는 한 줄로 그렇다고 적는다.
+        if state.busArrivalClockText == nil {
+            HStack(spacing: 5) {
+                Image(systemName: "bus.fill")
+                    .font(.system(size: 10, weight: .bold))
+                Text(state.busArrivalNo.map { "\($0)번" } ?? "")
+                    .font(.system(size: 11, weight: .heavy))
+                Text("도착 정보 아직 없음")
+                    .font(.system(size: 11, weight: .medium))
+                    .opacity(0.7)
+                refreshButton
+            }
+            .foregroundStyle(state.tint)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 12).fill(state.tint.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(state.tint.opacity(0.22), lineWidth: 0.5))
+        } else {
         // **칸을 맞춘다.** 두 줄이 나란히 있을 때 시각끼리·정류장 수끼리 세로로
         // 서지 않으면 "몇 분 더 기다리나" 를 견주기가 어렵다 — 그게 이 두 줄이
         // 있는 이유다. `Grid` 가 열 너비를 맞춰 준다.
@@ -357,6 +380,7 @@ struct RouteStripView: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(state.tint.opacity(0.18)))
         .overlay(RoundedRectangle(cornerRadius: 12)
             .strokeBorder(state.tint.opacity(0.35), lineWidth: 0.5))
+        }
     }
 
     /// 눌러서 지금 다시 묻는다. 넘겨받은 일이 없으면(가족 화면) 안 그린다.

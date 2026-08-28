@@ -683,7 +683,15 @@ extension HomecomingAttributes.ContentState {
     ///
     /// 값이 없으면 nil 이고 두 화면 다 줄을 안 그린다.
     var busArrivalLine: String? {
-        guard let clock = busArrivalClockText, let no = busArrivalNo else { return nil }
+        guard let no = busArrivalNo else { return nil }
+        // **번호만 오고 시각이 없을 때가 있다.** 승차 15분 창은 열렸는데 실시간
+        // 도착정보에 그 차가 아직 안 잡힌 시간이다 — 차가 11~17정류장 안에
+        // 들어와야 나온다(2026-08-27 실측). 그날 창이 18:17 에 열렸는데 값은
+        // 18:27:39 에 왔고, 그 10분 동안 화면이 아무 말도 안 해서 고장으로 읽혔다.
+        //
+        // **없는 것과 아직 모르는 것을 가른다.** 승차가 아직 먼 구간에서는
+        // 번호 자체가 안 오므로 이 줄도 안 그려진다.
+        guard let clock = busArrivalClockText else { return "\(no)번 · 도착 정보 아직 없음" }
         var line = "\(no)번 \(clock) 도착"
         if let stops = busArrivalStopsText { line += " · \(stops)" }
         if let then = busArrivalThenClockText { line += " · 다음 \(then)" }

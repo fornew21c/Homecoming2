@@ -2230,6 +2230,22 @@ def content_state(session):
     if route:
         arrival = arrival_ready(route["legs"], session["route_progress"] or 0,
                                 lat=session["last_lat"], lon=session["last_lon"])
+        # **값이 없으면 왜 없는지 한 줄 남긴다.** 창이 열렸는데 자료가 아직
+        # 안 준 시간이 실제로 10분 있었다(2026-08-27). 화면이 그동안 아무 말도
+        # 안 해서 고장으로 읽혔다.
+        if not arrival:
+            waiting = arrival_pending(route["legs"], session["route_progress"] or 0,
+                                      lat=session["last_lat"], lon=session["last_lon"])
+            if waiting:
+                # **번호만 싣는다. 시각은 아직 모른다.** 새 필드를 만들지 않는
+                # 이유는 이게 거짓이 아니어서다 — 다음에 탈 버스는 999가 맞고,
+                # 언제 오는지를 모를 뿐이다. `ContentState` 에 필드를 더하면
+                # 네 곳을 같이 고쳐야 하고(CLAUDE.md), 빠뜨리면 화면만 빈다.
+                #
+                # 덤이 있다. 앱의 30초 타이머가 `busArrivalNo` 를 보고 도는데,
+                # 창이 열리자마자 번호가 실리니 **자료가 나오는 즉시** 채워진다.
+                # 2026-08-27 에 10분 걸린 자리가 30초로 줄어든다.
+                state["busArrivalNo"] = waiting
         if arrival:
             state["busArrivalNo"] = arrival["no"]
             state["busArrivalAt"] = iso(arrival["at"])
@@ -2897,6 +2913,32 @@ def arrival_recently_measured(route_no, lat, lon, at):
         return False, None
     measured, value = cached
     return (at - measured).total_seconds() < ARRIVAL_BURST_SECONDS, value
+
+
+def arrival_pending(legs, progress, now=None, lat=None, lon=None):
+    """**승차 창은 열렸는데 값이 아직 없나.** 그러면 그 노선번호, 아니면 None.
+
+    칩이 없는 것이 화면에서 세 가지로 똑같이 보였다 — 승차가 아직 멀다(정상),
+    버스가 아직 안 잡혔다(정상), 고장. 사용자가 두 번 다 "왜 안 뜨지" 로 읽었다.
+
+    **셋 중 가운데를 말해 주려는 것이다.** 실시간 도착정보는 차가 11~17정류장 안에
+    들어와야 나온다(2026-08-27 실측: 999 첫차 17분 뒤가 가장 먼 값이고 둘째 차는
+    아예 없다). 창은 15분이라 **자료보다 먼저 열린다.** 그날 18:17 에 창이 열렸는데
+    칩은 18:27:39 에야 떴고, 그 10분 동안 화면이 아무 말도 안 했다.
+
+    `arrival_ready` 와 같은 판정을 쓴다 — 그쪽이 값을 주면 여기는 None 이다.
+    """
+    at = now or datetime.now(timezone.utc)
+    leg = next_bus_leg(legs, progress, lat, lon)
+    if not leg or not leg.get("busNo"):
+        return None
+    if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
+        return None
+    if not (leg.get("points") or []):
+        return None
+    if arrival_ready(legs, progress, now=at, lat=lat, lon=lon):
+        return None
+    return str(leg["busNo"])
 
 
 def arrival_ready(legs, progress, now=None, lat=None, lon=None):
