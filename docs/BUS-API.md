@@ -58,6 +58,10 @@ https://apis.data.go.kr/1613000/BusSttnInfoInqireService/getSttnNoList
 **좌표가 있다. 그런데 서울이 없다.** 도시코드 138개에 서울이 아예 빠져 있다
 (서울은 별도 TOPIS API 를 쓴다). 고양시는 `31100` 이다.
 
+> **2026-08-27 갱신 — 이제 두 지역 다 이름으로 좌표를 얻는다.**
+> 서울은 열린데이터광장 표(`seoul-stops.json`, 11,239건), 경기는 GBIS
+> `getBusStationListv2`(이름만 주면 좌표까지 온다). 아래 표는 그 전 이야기다.
+
 ## 그래서 지금 얻을 수 있는 것
 
 | | 서울 | 경기(고양) |
@@ -104,7 +108,8 @@ https://apis.data.go.kr/1613000/BusRoutespecificStopInformation
    차례로 시험해 되는 것을 캐시한다(`bus_opr_ymd`).
 
 2. **`sgg_cd` 가 없으면 52 `MISSING_REQUIRED_PARAMETER` 다.** 그런데 그 값을
-   좌표나 노선번호에서 얻는 길이 없다 —
+   **이 계열 안에서는** 좌표나 노선번호에서 얻지 못했다 —
+   (2026-08-27 — 경기는 GBIS 가 `routeId` 하나로 답해서 이 값이 필요 없어졌다)
    - 노선표(`BusRoute`)의 `sgg_cd` 는 경기 4,671개 노선 전부 `41000`(도 단위 자리표시자)
    - 시군구 목록 API(`BusLcInfoInqireService`)는 권한 없음(403)
    - 코드 공간을 훑는 것도 못 믿는다 — 동시 요청 16개로 훑었더니 조용히 실패가
