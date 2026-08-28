@@ -98,21 +98,16 @@ struct HomecomingLockScreenView: View {
 
             HomecomingProgressBar(state: state)
 
-            // **다음에 탈 버스.** 서버가 승차 15분 전부터만 싣고, 서울 시내버스는
-            // 자료가 없어 영영 안 온다 — 그래서 평소에는 이 줄이 없다.
+            // **다음에 탈 버스. 앱 카드와 같은 칩이다.**
             //
-            // 문구는 `ContentState.busArrivalLine` 이 만든다. 노선도가 같은 것을
-            // 쓰므로 두 화면이 갈라질 수 없다.
-            if let line = state.busArrivalLine {
-                HStack(spacing: 4) {
-                    Image(systemName: "bus.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text(line)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .foregroundStyle(.white.opacity(0.75))
+            // 예전에는 여기만 흰 글씨 한 줄이었다 — 같은 값이 앱에서는 상태색 칩,
+            // 잠금화면에서는 흰 줄로 보였다. 어느 쪽이 맞는지 알 수 없는 모양이다.
+            //
+            // 서버가 승차 15분 전부터만 싣고 서울 시내버스는 자료가 없어 영영 안
+            // 온다 — 그래서 평소에는 이 칩이 없다. 새로고침 버튼은 안 넘기므로
+            // 자동으로 빠진다(위젯에서는 누를 수 없다).
+            if state.busArrivalNo != nil {
+                BusArrivalChip(state: state)
             }
 
             HStack(spacing: 8) {
@@ -235,25 +230,15 @@ enum HomecomingIsland {
             VStack(spacing: 8) {
                 HomecomingProgressBar(state: state, height: 7)
 
-                // **다음에 탈 버스. 잠금화면과 같은 줄, 같은 마크업이다.**
+                // **다음에 탈 버스. 앱 카드·잠금화면과 같은 칩이다.**
                 //
-                // 잠금화면은 진행 바 다음에 이 줄을 따로 두고 구간 문구를 그대로
-                // 남긴다. 두 화면이 갈라지면 "잠금화면에서 본 것" 과 "아일랜드에서
-                // 본 것" 이 달라지고, 그러면 어느 쪽이 맞는지 알 수 없다.
-                //
-                // 서버가 승차 15분 전부터만 싣고 서울 시내버스는 자료가 없어 영영
-                // 안 온다 — 그래서 평소에는 이 줄이 없다.
-                if let line = state.busArrivalLine {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bus.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text(line)
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                // 세 화면이 `BusArrivalChip` 하나를 쓰므로 색도 배치도 문구도
+                // 갈라질 수 없다.
+                if state.busArrivalNo != nil {
+                    HStack {
+                        BusArrivalChip(state: state)
                         Spacer(minLength: 0)
                     }
-                    .foregroundStyle(.white.opacity(0.75))
                 }
 
                 HStack(spacing: 6) {
