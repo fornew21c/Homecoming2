@@ -2846,7 +2846,7 @@ def next_bus_leg(legs, progress, lat=None, lon=None):
 
     # 지금 구간이 버스이고, 아직 그 승차 지점 근처에 서 있으면 그게 다음 버스다.
     current = legs[here]
-    if (current.get("mode") == "bus" and current.get("busNo")
+    if (current.get("mode") == "bus" and leg_route_numbers(current)
             and lat is not None and lon is not None):
         points = current.get("points") or []
         if points and haversine(lat, lon, points[0][0],
@@ -2854,7 +2854,7 @@ def next_bus_leg(legs, progress, lat=None, lon=None):
             return current
 
     for leg in legs[here + 1:]:
-        if leg.get("mode") == "bus" and leg.get("busNo"):
+        if leg.get("mode") == "bus" and leg_route_numbers(leg):
             return leg
     return None
 
@@ -2991,7 +2991,8 @@ def arrival_pending(legs, progress, now=None, lat=None, lon=None):
     """
     at = now or datetime.now(timezone.utc)
     leg = next_bus_leg(legs, progress, lat, lon)
-    if not leg or not leg.get("busNo"):
+    numbers = leg_route_numbers(leg) if leg else []
+    if not numbers:
         return None
     if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
         return None
@@ -2999,7 +3000,7 @@ def arrival_pending(legs, progress, now=None, lat=None, lon=None):
         return None
     if arrival_ready(legs, progress, now=at, lat=lat, lon=lon):
         return None
-    return str(leg["busNo"])
+    return numbers[0]
 
 
 def arrival_ready(legs, progress, now=None, lat=None, lon=None):
@@ -3028,26 +3029,29 @@ def arrival_ready(legs, progress, now=None, lat=None, lon=None):
         return arrival_says(legs, progress,
                             f"{leg['busNo']}번 구간에 좌표가 없다 — 승차 지점을 모른다")
     lat, lon = points[0][0], points[0][1]
-    key = (str(leg["busNo"]), lat, lon)
-    cached = _arrival_ready.get(key)
-    value = cached[1] if cached else None
+    numbers = leg_route_numbers(leg)
 
-    # **이미 지나간 시각은 주지 않는다.** 배경 갱신이 계속 실패하면 마지막으로
-    # 성공한 값이 그대로 남는데, 절대시각이라 시계가 흐르면 언젠가 과거가 된다.
-    # 그때 화면은 **이미 떠난 버스**를 `18:42 도착` 이라고 말한다.
-    #
-    # 창이 15분이라 최대 15분까지 그럴 수 있었다. 하필 정류장에서 기다리는
-    # 그 15분이다. 틀린 값을 그리는 것을 아무것도 안 그리는 것보다 나쁘게 본다.
-    #
-    # 지나갔으면 캐시가 신선하든 아니든 새로 묻는다 — 그다음 차가 알고 싶은 것이다.
-    #
-    # **엄격한 과거만 지난 것으로 본다.** 도착 시각이 정확히 지금이면 "지금 도착"
-    # 이고 그건 참이다. 거짓말이 되는 것은 이미 지나간 뒤부터다.
-    gone = value is not None and value["at"] < at
-    if gone:
-        value = None
-    elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
-        return value
+    # **노선마다 캐시를 본다.** 기다리지 않는다 — 없는 것은 배경에서 채운다.
+    found = []
+    for number in numbers:
+        cached = _arrival_ready.get((number, lat, lon))
+        value = cached[1] if cached else None
+
+        # **이미 지난 시각은 주지 않는다.** 배경 갱신이 계속 실패하면 마지막으로
+        # 성공한 값이 그대로 남는데, 절대시각이라 시계가 흐르면 언젠가 과거가
+        # 된다. 그때 화면은 **이미 떠난 버스**를 `18:42 도착` 이라고 말한다.
+        #
+        # 창이 15분이라 최대 15분까지 그럴 수 있었다. 하필 정류장에서 기다리는
+        # 그 15분이다. 틀린 값을 그리는 것을 아무것도 안 그리는 것보다 나쁘게 본다.
+        gone = value is not None and value["at"] < at
+        if gone:
+            value = None
+        elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+            found.append(value)
+            continue
+        start_arrival_refresh(number, lat, lon)
+        found.append(value)
+    return merge_arrivals(found)
 
     start_arrival_refresh(leg["busNo"], lat, lon)
     return value

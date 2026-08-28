@@ -106,5 +106,51 @@ class LegRouteNumbersTests(unittest.TestCase):
         self.assertEqual(hs.leg_route_numbers({"busNos": []}), [])
 
 
+class ArrivalReadyMultiTests(unittest.TestCase):
+    """`arrival_ready` 가 구간의 노선을 **전부** 묻고 합친다."""
+
+    LEGS = [
+        {"mode": "walk", "startsAt": 0, "seconds": 240, "points": [[37.5, 127.0]]},
+        {"mode": "bus", "busNo": "163", "busNos": ["163", "6713"],
+         "startsAt": 240, "seconds": 900, "points": [[37.528491, 126.918087]]},
+    ]
+
+    def setUp(self):
+        hs._arrival_ready.clear()
+
+    def seed(self, no, minutes):
+        key = (no, 37.528491, 126.918087)
+        hs._arrival_ready[key] = (hs.now(), value(no, minutes, 1))
+
+    def test_두_노선을_다_보고_빠른_쪽을_준다(self):
+        self.seed("163", 12)
+        self.seed("6713", 3)
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *_a: None):
+            got = hs.arrival_ready(self.LEGS, 0)
+        self.assertEqual(got["no"], "6713")
+        self.assertEqual(got["thenNo"], "163")
+
+    def test_한_노선만_있어도_준다(self):
+        self.seed("6713", 3)
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *_a: None):
+            got = hs.arrival_ready(self.LEGS, 0)
+        self.assertEqual(got["no"], "6713")
+
+    def test_옛_구간은_busNo_하나로_돈다(self):
+        legs = [dict(self.LEGS[0]), {k: v for k, v in self.LEGS[1].items()
+                                     if k != "busNos"}]
+        self.seed("163", 12)
+        with mock.patch.object(hs, "start_arrival_refresh", lambda *_a: None):
+            got = hs.arrival_ready(legs, 0)
+        self.assertEqual(got["no"], "163")
+
+    def test_노선마다_배경_갱신을_건다(self):
+        asked = []
+        with mock.patch.object(hs, "start_arrival_refresh",
+                               lambda no, la, lo: asked.append(no)):
+            hs.arrival_ready(self.LEGS, 0)
+        self.assertEqual(sorted(asked), ["163", "6713"])
+
+
 if __name__ == "__main__":
     unittest.main()
