@@ -1,4 +1,5 @@
 import CoreLocation
+import PhotosUI
 import SwiftUI
 
 /// 귀가 경로를 폰에서 만든다.
@@ -45,6 +46,11 @@ struct RouteEditor: View {
     @State private var notice: String?
     @State private var confirmingDelete = false
 
+    /// 캡처에서 읽은 결과. 요약 띠가 이걸 보고 적는다.
+    @State private var imported: CaptureImport.Result?
+    @State private var picked: [PhotosPickerItem] = []
+    @State private var isReading = false
+
     private let accent = Color(red: 0.42, green: 0.85, blue: 0.62)
 
     /// 전체 소요시간. 구간 시간의 합이다.
@@ -81,6 +87,7 @@ struct RouteEditor: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    captureBanner
                     nameField
                     originField
                     stepList
@@ -144,6 +151,96 @@ struct RouteEditor: View {
 
     // MARK: - 조각
 
+    /// 캡처에서 채우는 자리. 읽기 전에는 버튼이고, 읽은 뒤에는 무엇을 읽었는지 적는다.
+    ///
+    /// **새 화면을 안 만든다.** 못 채운 칸을 그 자리에서 바로 고치는 것이
+    /// 확인 화면을 따로 두는 것보다 낫다 — 배울 것이 없다.
+    @ViewBuilder
+    private var captureBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PhotosPicker(selection: $picked, maxSelectionCount: 6,
+                         matching: .screenshots) {
+                HStack(spacing: 8) {
+                    if isReading {
+                        ProgressView().controlSize(.small).tint(accent)
+                    } else {
+                        Image(systemName: "text.viewfinder")
+                    }
+                    Text(isReading ? "캡처를 읽는 중" : "캡처에서 채우기")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(accent.opacity(0.16)))
+                .foregroundStyle(accent)
+            }
+            .disabled(isReading)
+
+            if let imported {
+                // 무엇을 읽었는지 센다. **눈으로 세게 하지 않는다** — 조용히
+                // 안 채워진 칸이 있는 것이 이 저장소가 싫어하는 모양이다.
+                let stops = imported.steps.filter { $0.mode.moves && $0.to != nil }.count
+                let routes = Set(imported.steps.flatMap(\.busNos)).count
+                let waits = imported.steps.filter { $0.mode == .wait }.count
+                Text("정류장 \(stops)곳 · 노선 \(routes)개 · 대기 \(waits)곳(균등)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.55))
+                if imported.unresolved > 0 {
+                    Text("⚠ 못 채운 칸 \(imported.unresolved) — 지도에서 찍어 주세요")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.orange)
+                }
+                ForEach(imported.notes, id: \.self) { note in
+                    Text("· \(note)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange.opacity(0.85))
+                }
+            } else {
+                Text("길찾기 앱의 **구간 상세** 화면을 스크롤하며 찍어 고르세요. 요약 목록 화면은 소요시간만 있어 못 씁니다.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.35))
+            }
+        }
+        .onChange(of: picked) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await readCapture(items) }
+        }
+    }
+
+    /// 고른 캡처를 읽어 구간을 채운다.
+    ///
+    /// **이름은 안 건드린다.** 캡처에 경로 이름이 없다 — 사람이 친다.
+    /// 출발지도 안 건드린다. 캡처의 주소는 좌표로 바꿀 수 없다(재 봤다).
+    private func readCapture(_ items: [PhotosPickerItem]) async {
+        isReading = true
+        failure = nil
+        defer {
+            isReading = false
+            picked = []
+        }
+        var images: [Data] = []
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                images.append(data)
+            }
+        }
+        guard !images.isEmpty else {
+            failure = "고른 캡처를 읽지 못했습니다."
+            return
+        }
+        do {
+            let got = try await CaptureImport.read(images: images, using: store)
+            guard !got.steps.isEmpty else {
+                failure = CaptureImport.Failure.noText.errorDescription
+                return
+            }
+            steps = got.steps
+            imported = got
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
     private var nameField: some View {
         VStack(alignment: .leading, spacing: 6) {
             label("이름")
@@ -169,6 +266,15 @@ struct RouteEditor: View {
             ) { hit in
                 originCoordinate = hit.coordinate
                 originName = hit.name
+            }
+            // **캡처의 출발지는 글자로만 적는다.** 좌표로 못 바꾼다 —
+            // `CLGeocoder` 가 도로명 주소에도 `kCLErrorDomain 8` 이고,
+            // 검색은 근처 가게를 준다(2026-08-28 실측). 2026-08-20 에 그렇게
+            // 고른 GS25 가 가족 잠금화면에 `GS25까지 9분` 으로 떴다.
+            if let hint = imported?.originHint {
+                Text("캡처의 출발지: \(hint)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.45))
             }
         }
     }

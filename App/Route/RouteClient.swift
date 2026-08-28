@@ -39,6 +39,13 @@ protocol RouteClient: Sendable {
     /// 이름으로 정류장을 찾는다. 애플 지도가 모르는 이름을 공공데이터는 안다.
     func stops(named text: String, route: String?) async throws -> [BusStop]
 
+    /// 길찾기 앱 캡처의 OCR 줄을 구간으로 풀어 받는다. `pages` 는 장별 줄 목록.
+    ///
+    /// **이미지는 안 보낸다.** 글자 읽기는 폰에서 끝내고 줄만 올린다. 문법이
+    /// 서버에 있는 이유는 길찾기 앱이 화면을 바꾸면 깨지는 코드이기 때문이다 —
+    /// 서버면 배포 한 번이고 앱이면 재설치다.
+    func parseCapture(pages: [[String]]) async throws -> ParsedCapture
+
     /// 버스 한 구간이 실제로 지나는 정류장 좌표. 빈 배열이면 그릴 것이 없다.
     ///
     /// 노선 자료가 서버에만 있어서(공공데이터 키가 서버에 있다) 이쪽으로 묻는다.
@@ -366,6 +373,31 @@ struct RemoteRouteClient: RouteClient {
         return saved.routeId
     }
 
+    func parseCapture(pages: [[String]]) async throws -> ParsedCapture {
+        let (data, http) = try await auth.send(baseURL: baseURL, session: session) {
+            var request = URLRequest(url: url(for: "capture/parse"))
+            request.httpMethod = "POST"
+            // 정류장 조회가 여러 번 나갈 수 있다(경기는 GBIS 를 이름으로 부른다).
+            // 저장과 같은 자로 기다린다.
+            request.timeoutInterval = 30
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: ["pages": pages])
+            return request
+        }
+        struct Failure: Decodable { let error: String }
+        guard (200..<300).contains(http.statusCode) else {
+            if let failure = try? JSONDecoder().decode(Failure.self, from: data) {
+                throw RouteError.rejected(failure.error)
+            }
+            throw RouteError.badResponse(http.statusCode)
+        }
+        guard let parsed = try? JSONDecoder().decode(ParsedCapture.self, from: data) else {
+            throw RouteError.badResponse(-2)
+        }
+        return parsed
+    }
+
     func delete(id: String) async throws {
         let (_, http) = try await auth.send(baseURL: baseURL, session: session) {
             var request = URLRequest(url: url(for: "route/\(id)"))
@@ -531,4 +563,7 @@ struct UnavailableRouteClient: RouteClient {
                       fromName: String, toName: String) async throws -> [CLLocationCoordinate2D] { [] }
     func subwayWaypoints(fromName: String,
                          toName: String) async throws -> [CLLocationCoordinate2D] { [] }
+    func parseCapture(pages: [[String]]) async throws -> ParsedCapture {
+        throw RouteError.unavailable
+    }
 }

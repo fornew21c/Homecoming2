@@ -66,6 +66,15 @@ final class RouteStore {
                                               fromName: fromName, toName: toName)) ?? []
     }
 
+    /// 캡처의 OCR 줄을 구간으로 풀어 받는다. 실패는 던진다 —
+    /// **조용히 빈 경로를 주면 사람이 왜 안 채워졌는지 알 수 없다.**
+    func parseCapture(pages: [[String]]) async throws -> ParsedCapture {
+        guard isAvailable else { throw CaptureImport.Failure.unavailable }
+        isWorking = true
+        defer { isWorking = false }
+        return try await client.parseCapture(pages: pages)
+    }
+
     /// 지하철 한 구간이 지나는 역 좌표. 실패하면 빈 배열 — 그때는 두 역 직선이다.
     func subwayWaypoints(fromName: String, toName: String) async -> [CLLocationCoordinate2D] {
         guard isAvailable else { return [] }

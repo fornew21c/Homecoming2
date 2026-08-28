@@ -40,12 +40,17 @@ def envelope(code, body=None):
 class GbisGetTests(unittest.TestCase):
 
     def call(self, payload):
-        """`urlopen` 을 막고 정해진 JSON 을 돌려준다."""
+        """`urlopen` 을 막고 정해진 JSON 을 돌려준다.
+
+        **키도 넣어야 한다.** `gbis_get` 은 키가 없으면 나가지 않고 바로 None 이다
+        (나가 봐야 403 이다). 여기서 재는 것은 봉투 해독이라 키가 있는 자리다.
+        """
         def fake(_url, timeout=None, context=None):
             # `BytesIO` 는 그 자체로 컨텍스트 매니저다 — `with` 가 그대로 된다.
             return io.BytesIO(_json.dumps(payload).encode("utf-8"))
 
-        with mock.patch.object(hs.urllib.request, "urlopen", fake):
+        with mock.patch.object(hs, "TAGO_KEY", "시험용"), \
+             mock.patch.object(hs.urllib.request, "urlopen", fake):
             return hs.gbis_get("busrouteservice/v2/getBusRouteListv2", {"keyword": "999"})
 
     def test_정상이면_msgBody_를_준다(self):

@@ -1133,6 +1133,10 @@ def gbis_get(path, params):
         resultCode 4   "결과가 존재하지 않습니다". **`msgBody` 자체가 없다**
                        (2026-08-27 실측 — `위시티1,3단지` 로 물으면 이렇게 온다)
     """
+    # **키가 없으면 나가지 않는다.** 나가 봐야 403 이 온다. 시험 환경에 키가
+    # 없어서, 이걸 안 막으면 시험이 망을 타고 실패할 호출을 기다린다.
+    if not TAGO_KEY:
+        return None
     query = urllib.parse.urlencode({"serviceKey": TAGO_KEY, "format": "json", **params})
     try:
         with urllib.request.urlopen(f"{GBIS}/{path}?{query}", timeout=15,
@@ -1898,6 +1902,349 @@ def narrow_by_route(stops, route_no):
         return stops
     kept = [s for s in stops if s.get("ars") in numbers]
     return kept or stops
+
+
+# ── 길찾기 앱 캡처 읽기 ────────────────────────────────────────────────────
+#
+# 앱이 캡처를 **온디바이스로** OCR 해서 줄만 올린다. 이미지는 폰을 안 떠난다.
+# 여기서 문법을 풀고 좌표를 채워 편집기가 그대로 쓸 구간을 돌려준다.
+#
+# **문법이 서버에 있는 이유는 깨질 코드이기 때문이다.** 길찾기 앱이 화면을
+# 바꾸면 여기가 깨진다 — 서버면 배포 한 번이고 앱이면 재설치다.
+#
+# 아래 정규식은 전부 **2026-08-28 실기기 캡처 세 장의 실제 OCR 출력**에서 나왔다.
+# 본보기가 `fixtures/capture-{1,2,3}.txt` 에 그대로 있다.
+
+# `14:35 - 15:52 | 2,050원` — 머리글. 총 시간이 여기서 나온다.
+_CAP_SPAN = re.compile(r"^(\d{1,2}):(\d{2})\s*[-~–—]\s*(\d{1,2}):(\d{2})")
+# `1시간 17분` — 바닥글. **줄 전체여야 한다.**
+#
+# `고정 | 1시간 17분` 과 `최적 | 1시간 14분` 이 같은 화면에 같이 떠 있다.
+# 뒤엣것은 **다른 경로 후보**라, 앞에 딴 글자가 붙은 것을 받으면 3분이 틀린다.
+_CAP_HM = re.compile(r"^(\d+)시간\s*(\d+)분$")
+# `도보 82m • 2분` · `도보 328m. 7분` — **구분자를 믿지 않는다.**
+# 같은 자리가 장마다 `•` · `.` · `·` 로 흔들렸다(실측).
+_CAP_WALK = re.compile(r"^도보\D*\d+\s*m\D{0,6}(\d+)\s*분")
+# `4개 정류장 이동 · 9분` · `12개 역 이동 · 31분` · `8개 정류장 이동·10분`
+_CAP_RIDE = re.compile(r"^\d+개\s*(정류장|역)\s*이동\D{0,6}(\d+)\s*분")
+_CAP_BOARD = re.compile(r"^(.+?)\s*승차$")
+_CAP_ALIGHT = re.compile(r"^(.+?)\s*하차$")
+# 기둥번호. **서울 표 11,239개가 전부 5자리다**(실측) — 노선번호와 이걸로 가른다.
+_CAP_ARS = re.compile(r"^(\d{5})$")
+# `163>` · `999>` — 도착 카드의 노선번호. 꺾쇠가 붙어 온다.
+# 하이픈을 받는 이유는 서울 노선번호에 하이픈이 있기 때문이다(2026-08-28 기록).
+_CAP_ROUTE = re.compile(r"^(\d{1,4}(?:-\d{1,2})?[A-Za-z가-힣]?)\s*[>〉＞]?$")
+
+
+def capture_rows(lines):
+    """캡처 한 장의 OCR 줄에서 **뜻이 있는 줄만** 뽑는다.
+
+    돌려주는 것은 `kind` 가 붙은 dict 들이다 —
+    `total` · `walk` · `board` · `alight` · `ride` · `route`.
+
+    **모르는 줄은 조용히 버린다.** 화면에는 지도 라벨·상태바·버튼이 함께 찍힌다
+    (`국립아세안` · `LTE` · `80` · `도로의 오른쪽에 있습니다`). 앱이 주소 줄을
+    빼고 올리지만, **못 걸러도 여기서 안전해야 한다.**
+
+    위쪽 요약 막대는 통째로 버려진다 — `ㅊ 2분(표 9분 7분` 로 뭉개져 오고
+    (실측 conf 0.30), 거기서 분을 주우면 아래 상세 줄과 이중으로 세어진다.
+    """
+    rows = []
+    in_card = False          # 승차 줄 뒤의 도착 카드 안인가. 노선번호를 여기서만 줍는다
+
+    def last_stop():
+        return rows[-1] if rows and rows[-1]["kind"] in ("board", "alight") else None
+
+    for raw in lines:
+        line = (raw or "").strip()
+        if not line:
+            continue
+
+        found = _CAP_SPAN.match(line)
+        if found:
+            start = int(found.group(1)) * 60 + int(found.group(2))
+            end = int(found.group(3)) * 60 + int(found.group(4))
+            rows.append({"kind": "total", "minutes": (end - start) % (24 * 60)})
+            in_card = False
+            continue
+
+        found = _CAP_HM.match(line)
+        if found:
+            rows.append({"kind": "total",
+                         "minutes": int(found.group(1)) * 60 + int(found.group(2))})
+            in_card = False
+            continue
+
+        found = _CAP_WALK.match(line)
+        if found:
+            rows.append({"kind": "walk", "minutes": int(found.group(1))})
+            in_card = False
+            continue
+
+        found = _CAP_RIDE.match(line)
+        if found:
+            rows.append({"kind": "ride",
+                         "mode": "bus" if found.group(1) == "정류장" else "subway",
+                         "minutes": int(found.group(2))})
+            in_card = False
+            continue
+
+        found = _CAP_BOARD.match(line)
+        if found:
+            rows.append(_capture_stop("board", found.group(1)))
+            in_card = True
+            continue
+
+        found = _CAP_ALIGHT.match(line)
+        if found:
+            rows.append(_capture_stop("alight", found.group(1)))
+            in_card = False
+            continue
+
+        found = _CAP_ARS.match(line)
+        if found:
+            stop = last_stop()
+            # 정류장 줄 바로 뒤의 5자리만 기둥번호다. 사이에 `⑦` 같은 것이
+            # 끼어도 되지만(줄이 안 생긴다), 이미 번호가 있으면 딴 값이다.
+            if stop and stop["ars"] is None:
+                stop["ars"] = found.group(1)
+            continue
+
+        if in_card:
+            found = _CAP_ROUTE.match(line)
+            if found:
+                rows.append({"kind": "route", "no": found.group(1)})
+                continue
+
+    return rows
+
+
+def _capture_stop(kind, text):
+    """`경의중앙선 서강대역` 처럼 노선이 앞에 붙은 것을 떼어 적는다.
+
+    지하철 승차 줄만 이렇게 온다. 버스는 정류장 이름뿐이다.
+    """
+    row = {"kind": kind, "name": text.strip(), "ars": None}
+    head, _, rest = row["name"].partition(" ")
+    if rest and head.endswith("선"):
+        row["name"] = rest.strip()
+        row["line"] = head
+    return row
+
+
+def capture_parse(pages, lookup=None):
+    """캡처 여러 장을 이어 구간으로 푼다. `pages` 는 장별 OCR 줄 목록.
+
+    **겹침은 줄이 아니라 뽑아 낸 줄(row)로 접는다.** 날 줄로 접으면 안 되는
+    것을 실제 캡처가 보여줬다 — 같은 자리를 장1 은 `서강대역 2 번 출구까지`
+    한 줄로, 장2 는 `서강대역` + `번 출구까지` 두 줄로 쪼갰다. 문법에 걸린
+    줄만 남기면 그 흔들림이 사라진다.
+    """
+    notes = []
+    totals = []
+    pages_rows = []
+    for lines in pages:
+        rows = capture_rows(lines)
+        totals += [r["minutes"] for r in rows if r["kind"] == "total"]
+        # 총 시간은 장마다 바닥글로 되풀이된다. 겹침을 볼 때는 방해가 되므로 뺀다.
+        pages_rows.append([r for r in rows if r["kind"] != "total"])
+
+    merged = []
+    for index, rows in enumerate(pages_rows):
+        if not merged:
+            merged = list(rows)
+            continue
+        overlap = 0
+        for k in range(min(len(merged), len(rows)), 0, -1):
+            if merged[-k:] == rows[:k]:
+                overlap = k
+                break
+        if overlap == 0:
+            notes.append(f"장 {index}과 장 {index + 1}이 안 이어집니다. "
+                         "가운데가 빠졌을 수 있습니다.")
+        merged += rows[overlap:]
+
+    if totals:
+        # 여러 번 나온다(장마다 바닥글). 가장 많이 나온 값을 쓴다.
+        best = max(set(totals), key=totals.count)
+        if len(set(totals)) > 1:
+            notes.append(f"총 시간이 갈립니다({'·'.join(f'{t}분' for t in sorted(set(totals)))}). "
+                         f"{best}분으로 뒀습니다.")
+        merged.insert(0, {"kind": "total", "minutes": best})
+
+    got = capture_steps(merged, lookup=lookup)
+    got["notes"] = notes + got["notes"]
+    return got
+
+
+def capture_steps(rows, lookup=None):
+    """뽑아 낸 줄을 편집기가 쓸 구간으로. `{"steps": [...], "notes": [...]}`
+
+    **못 짚은 좌표는 비운다. 채워 넣지 않는다.** 틀린 좌표가 박히면 서버가 그
+    자리를 지나갔는지로 구간을 판정하니 조용히 어긋난다. 편집기가 빈 칸을
+    표시하고 사람이 지도에서 찍는다 — `canSave` 가 이미 저장을 막는다.
+    """
+    find = lookup or stop_by_ars
+    notes = []
+    steps = []
+    total = None
+    board = None
+
+    def place(step, name, ars):
+        """구간의 도착 지점을 채운다. 못 짚으면 이름만 남고 좌표는 빈다."""
+        step["toName"] = name
+        found = find(name, ars)
+        if found:
+            step["lat"], step["lon"] = found["lat"], found["lon"]
+        else:
+            notes.append(f"{name} 의 위치를 못 찾았습니다. 지도에서 찍어 주세요.")
+
+    def step_of(mode, minutes):
+        return {"mode": mode, "toName": "", "minutes": minutes,
+                "lat": None, "lon": None, "busNos": []}
+
+    for row in rows:
+        kind = row["kind"]
+        if kind == "total":
+            total = row["minutes"]
+        elif kind == "walk":
+            steps.append(step_of("walk", row["minutes"]))
+        elif kind == "board":
+            board = {"name": row["name"], "ars": row.get("ars"),
+                     "line": row.get("line"), "routes": []}
+            # 앞의 도보가 끝나는 자리가 곧 이 승차 지점이다.
+            if steps and steps[-1]["mode"] == "walk" and not steps[-1]["toName"]:
+                place(steps[-1], board["name"], board["ars"])
+                # 지하철역에서 내려 같은 이름의 정류장까지 걸을 때, 두 구간의
+                # 도착 이름이 같아진다. 가족 카드에 `풍산역까지` 가 두 번 뜬다.
+                if len(steps) > 1 and steps[-2]["toName"] == steps[-1]["toName"]:
+                    steps[-1]["toName"] += " 정류장"
+        elif kind == "route":
+            if board is not None and row["no"] not in board["routes"]:
+                board["routes"].append(row["no"])
+        elif kind == "ride":
+            steps.append(step_of("wait", 0))
+            steps[-1]["toName"] = _capture_wait_name(board)
+            ride = step_of(row["mode"], row["minutes"])
+            if row["mode"] == "bus" and board:
+                ride["busNos"] = list(board["routes"])
+            steps.append(ride)
+            board = None
+        elif kind == "alight":
+            for step in reversed(steps):
+                if step["mode"] in ("bus", "subway") and not step["toName"]:
+                    place(step, row["name"], row.get("ars"))
+                    break
+
+    notes += _capture_waits(steps, total)
+    return {"steps": steps, "notes": notes}
+
+
+def _capture_wait_name(board):
+    """환승 대기 구간의 이름. `163번 대기` · `경의중앙선 대기`."""
+    if board and board["routes"]:
+        return f"{board['routes'][0]}번 대기"
+    if board and board.get("line"):
+        return f"{board['line']} 대기"
+    return "대기"
+
+
+def _capture_waits(steps, total):
+    """대기 시간을 나눠 넣는다. 돌려주는 것은 적어 둘 말.
+
+    **캡처는 대기를 줄로 안 그린다.** 총 시간에서 구간 합을 뺀 만큼이 대기인데,
+    어디에 얼마씩인지는 안 나온다. 실측(2026-08-28) — 상세 줄 합이 68분인데
+    머리글은 77분이었고, 실제 경로의 대기는 `3·4·2` 였다.
+
+    **균등하게 나눈다.** 총합과 도착예정은 첫 번에 맞고, 사람이 편집기에서
+    고칠 수 있다. 총 시간을 모르면 **대기를 아예 안 만든다** — 짐작한 값을
+    넣지 않는다.
+    """
+    waits = [s for s in steps if s["mode"] == "wait"]
+    if not waits:
+        return []
+    if total is None:
+        steps[:] = [s for s in steps if s["mode"] != "wait"]
+        return []
+
+    moving = sum(s["minutes"] for s in steps if s["mode"] != "wait")
+    left = total - moving
+    if left < 0:
+        return [f"캡처의 총 시간({total}분)이 구간 합({moving}분)보다 적습니다. "
+                "대기를 0분으로 뒀습니다."]
+    base, extra = divmod(left, len(waits))
+    for index, wait in enumerate(waits):
+        wait["minutes"] = base + (1 if index < extra else 0)
+    return []
+
+
+def stop_by_ars(name, ars):
+    """이름과 **기둥번호**로 정류장 하나. 못 짚으면 None.
+
+    길찾기 앱 캡처가 이름 밑에 기둥번호를 찍어 준다(`신촌로터리` / `14205`).
+    그 번호가 이름만으로는 못 정하는 것을 정한다 — 실측(2026-08-28):
+
+        신촌로터리        서울 표에 4건    14168 · 14169 · 14204 · 14205
+        풍산역 + 999     좁혀도 2건      20753 · 58271        ← 길 양쪽
+        위시티1.3단지+999 좁혀도 2건      20795 · 20796        ← 길 양쪽
+
+    `narrow_by_route` 의 주석이 적어 둔 한계가 여기서 끝난다. 그 주석의 다른
+    한 줄(*"그 번호는 기둥에 가서 봐야 아는 값이다"*)은 캡처에서는 아니다.
+
+    **번호로 찾은 이름이 준 이름과 안 맞으면 버린다.** OCR 이 번호 한 자를
+    잘못 읽으면 3km 떨어진 자리가 조용히 박힌다 — `19132`(국회의사당역)를
+    `14205`(신촌로터리)로 읽는 식이다. 번호만 믿지 않는다.
+
+    번호가 없으면 이름만으로 찾고 **후보가 하나일 때만** 쓴다. 캡처에서 번호가
+    안 붙는 자리가 지하철역이라, 구워 둔 역 표를 먼저 본다.
+    """
+    want = (name or "").strip()
+    if not want:
+        return None
+
+    def named(found):
+        return {"name": found["name"], "ars": found.get("ars"),
+                "lat": found["lat"], "lon": found["lon"]}
+
+    if ars:
+        # 서울은 구운 표에서 바로. 11,239개가 전부 5자리다.
+        for row in SEOUL_STOPS:
+            if len(row) > 3 and row[3] == ars:
+                if not _same_stop(row[0], want):
+                    log(f"  기둥 {ars} 는 '{row[0]}' 인데 캡처는 '{want}' — 버린다")
+                    return None
+                return {"name": row[0], "ars": ars, "lat": row[1], "lon": row[2]}
+        # 경기는 GBIS 가 `keyword` 로만 답한다. 이름으로 찾고 번호로 고른다.
+        for stop in gbis_stops_named(want, 20):
+            if stop.get("ars") == ars:
+                return named(stop)
+        return None
+
+    # 번호가 없으면 지하철역이다 — 캡처가 역에는 번호를 안 붙인다.
+    #
+    # **여기서는 이름이 꼭 같아야 한다.** `_find_station` 은 포함 관계를 헐겁게
+    # 보는데(`서강대학교` ⊂ `서강대역` 을 맞추려고 그렇다), 그러면 버스 정류장
+    # `신촌로터리` 가 지하철 `신촌역` 에 걸린다 — 570m 옆이다. 실제로 걸렸다.
+    for line in subway_lines().values():
+        for station in line["역"]:
+            if _station_key(station["이름"]) == _station_key(want):
+                return {"name": station["이름"], "ars": None,
+                        "lat": station["lat"], "lon": station["lon"]}
+
+    found = [s for s in stop_search(want, 8) if _same_stop(s["name"], want)]
+    return named(found[0]) if len(found) == 1 else None
+
+
+def _same_stop(a, b):
+    """같은 정류장을 가리키는 이름인지. 표기 차이와 접두·접미를 흡수한다.
+
+    자료는 `국회의사당역.KB국민은행` 인데 캡처도 그렇게 적어 준다. 그래도
+    한쪽이 더 길 수 있어(`약산마을.애니골입구` 와 `애니골입구`) 포함도 본다.
+    """
+    x, y = name_key(a), name_key(b)
+    if not x or not y:
+        return False
+    return x == y or x in y or y in x
 
 
 def stop_search(text, limit=8):
@@ -3469,6 +3816,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_push(path, body, me)
         if path == "/route":
             return self.handle_route_save(body, me)
+        if path == "/capture/parse":
+            return self.handle_capture_parse(body)
         if path == "/pair/invite":
             return self.handle_invite(body, me)
         if path == "/pair/accept":
@@ -3869,6 +4218,27 @@ class Handler(BaseHTTPRequestHandler):
             f"SELECT * FROM sessions WHERE id = ? AND traveler = ?{clause}",
             (session_id, me),
         ).fetchone()
+
+    def handle_capture_parse(self, body):
+        """길찾기 앱 캡처의 OCR 줄을 구간으로 풀어 준다.
+
+        **이미지는 안 받는다.** 앱이 온디바이스로 OCR 해서 줄만 올린다. 앱은
+        올리기 전에 주소 꼴 줄을 뺀다 — 출발지 주소는 화면에만 쓰인다.
+
+        저장하지 않는다. 계정별로 다를 것도 없다 — 순수하게 푸는 일이다.
+        """
+        pages = body.get("pages")
+        if not isinstance(pages, list) or not pages:
+            return self.reply(400, {"error": "pages 가 필요합니다"})
+        pages = [[str(line) for line in (page or []) if isinstance(line, str)]
+                 for page in pages if isinstance(page, list)]
+        if not any(pages):
+            return self.reply(400, {"error": "읽은 글자가 없습니다"})
+
+        got = capture_parse(pages)
+        log(f"  캡처 {len(pages)}장 → 구간 {len(got['steps'])}개, "
+            f"적어 둘 것 {len(got['notes'])}개")
+        return self.reply(200, got)
 
     def handle_route_save(self, body, me):
         """자주 가는 귀가 경로를 저장한다.
