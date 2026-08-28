@@ -235,6 +235,27 @@ enum HomecomingIsland {
             VStack(spacing: 8) {
                 HomecomingProgressBar(state: state, height: 7)
 
+                // **다음에 탈 버스. 잠금화면과 같은 줄, 같은 마크업이다.**
+                //
+                // 잠금화면은 진행 바 다음에 이 줄을 따로 두고 구간 문구를 그대로
+                // 남긴다. 두 화면이 갈라지면 "잠금화면에서 본 것" 과 "아일랜드에서
+                // 본 것" 이 달라지고, 그러면 어느 쪽이 맞는지 알 수 없다.
+                //
+                // 서버가 승차 15분 전부터만 싣고 서울 시내버스는 자료가 없어 영영
+                // 안 온다 — 그래서 평소에는 이 줄이 없다.
+                if let line = state.busArrivalLine {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bus.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(line)
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.white.opacity(0.75))
+                }
+
                 HStack(spacing: 6) {
                     Text(subtitle)
                         .font(.system(size: 12))
