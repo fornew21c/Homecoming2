@@ -351,6 +351,48 @@ private struct StepRow: View {
     /// 검색이 준 원래 이름. 사용자가 이름을 고쳐도 "어디를 찍었는지" 는 남아야 한다.
     @State private var found = ""
 
+    /// 아직 칩이 안 된, 치고 있는 번호.
+    @State private var routeDraft = ""
+
+    /// **같은 번호는 한 번만 쌓는다.** 두 번 물으면 한도만 태운다.
+    private func commitRoute() {
+        let no = routeDraft.trimmingCharacters(in: CharacterSet(charactersIn: ", "))
+            .trimmingCharacters(in: .whitespaces)
+        routeDraft = ""
+        guard !no.isEmpty, !step.busNos.contains(no) else { return }
+        step.busNos.append(no)
+        // 첫 노선은 `busNo` 에도 남긴다 — 선을 그리는 것과 옛 서버가 그 값을 쓴다.
+        step.busNo = step.busNos.first
+    }
+
+    /// 등록된 노선들. `ⓧ` 로 하나씩 지운다.
+    @ViewBuilder
+    private var routeChips: some View {
+        if step.mode == .bus, !step.busNos.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(step.busNos, id: \.self) { no in
+                    HStack(spacing: 4) {
+                        Text(no)
+                            .font(.system(size: 12, weight: .semibold))
+                        Button {
+                            step.busNos.removeAll { $0 == no }
+                            step.busNo = step.busNos.first
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(.white.opacity(0.12)))
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -365,12 +407,14 @@ private struct StepRow: View {
                 Spacer(minLength: 0)
 
                 // **버스에만 노선번호를 묻는다.** 있으면 그 노선이 실제로 지나는
-                // 정류장을 따라 선을 그린다. 비워 두면 지금까지처럼 자동차 경로다 —
-                // 서울 시내버스는 노선 자료에 없으므로 비워 두는 것이 정상이다.
+                // 정류장을 따라 선을 그린다(첫 노선으로 그린다). 비워 두면
+                // 지금까지처럼 자동차 경로다.
+                //
+                // **여럿을 받는다.** 같은 구간을 두 노선이 가는 경우가 있다 —
+                // 국회의사당역 → 신촌로터리를 163 과 6713 이 같이 간다
+                // (2026-08-28 실측). 하나만 적으면 나머지가 도착 칩에 안 나온다.
                 if step.mode == .bus {
-                    TextField("노선", text: Binding(
-                        get: { step.busNo ?? "" },
-                        set: { step.busNo = $0.isEmpty ? nil : $0 }))
+                    TextField("노선", text: $routeDraft)
                         .keyboardType(.numbersAndPunctuation)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
@@ -379,6 +423,14 @@ private struct StepRow: View {
                         .padding(.vertical, 5)
                         .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08)))
                         .foregroundStyle(.white)
+                        .submitLabel(.done)
+                        .onSubmit { commitRoute() }
+                        // 쉼표나 공백을 쳐도 그때 쌓인다. 쉼표로 적던 습관이
+                        // 있어도 그대로 통한다 — 노선번호에는 둘 다 안 들어간다
+                        // (서울 723개 확인, 괄호와 하이픈만 있다).
+                        .onChange(of: routeDraft) { _, new in
+                            if new.hasSuffix(",") || new.hasSuffix(" ") { commitRoute() }
+                        }
                 }
 
                 Stepper("\(max(1, step.minutes))분", value: $step.minutes, in: 1...240)
@@ -392,6 +444,8 @@ private struct StepRow: View {
                     }
                 }
             }
+
+            routeChips
 
             if isLast {
                 // 마지막은 집이다. 고를 것이 없다.

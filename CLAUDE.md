@@ -5,8 +5,11 @@
 
 ## 먼저 읽을 것
 
+- **[`docs/HANDOFF-2026-08-28.md`](docs/HANDOFF-2026-08-28.md)** — **여기서
+  시작한다.** 한 구간에 버스 노선 여럿, 칩이 5분 사라진 원인,
+  로컬 서버가 앱 자격을 끊는 함정
 - **[`docs/HANDOFF-2026-08-27-stops.md`](docs/HANDOFF-2026-08-27-stops.md)** —
-  **여기서 시작한다.** 경기도 GBIS 개통, 이름만으로 정류장 정하기,
+  그 전날 오후. 경기도 GBIS 개통, 이름만으로 정류장 정하기,
   `곧 도착`·heartbeat 버그, 시험이 진짜 DB 를 지우던 것
 - **[`docs/HANDOFF-2026-08-27.md`](docs/HANDOFF-2026-08-27.md)** — 그날 오전.
   서울 버스가 열렸다, 서 있는 동안의 자동 갱신, GitHub 공개,
@@ -72,7 +75,7 @@
 
 ```bash
 python3 Tools/verify-progress-sync.py          # 카드 vs 지도, 실제 경로 28.4km
-python3 -m unittest discover -s Server        # 서버 시험 151개
+python3 -m unittest discover -s Server        # 서버 시험 200개
 ```
 
 ```bash

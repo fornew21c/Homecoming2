@@ -2251,23 +2251,7 @@ def content_state(session):
                 # 창이 열리자마자 번호가 실리니 **자료가 나오는 즉시** 채워진다.
                 # 2026-08-27 에 10분 걸린 자리가 30초로 줄어든다.
                 state["busArrivalNo"] = waiting
-        if arrival:
-            state["busArrivalNo"] = arrival["no"]
-            state["busArrivalAt"] = iso(arrival["at"])
-            if arrival["stops"] is not None:
-                state["busArrivalStops"] = arrival["stops"]
-            # **정류장 수는 늙지 않는다.** 시각은 절대시각이라 시계가 흐르면
-            # 스스로 맞아 가는데, `5정류장 전` 은 그대로 남아 거짓이 된다.
-            #
-            # 2026-08-26 실측: 15:36 에 5, 15:37:55 에 3 — 약 60초에 한 정류장이다.
-            # 그래서 화면이 나이를 알아야 하고, 낡으면 그 숫자만 감춘다.
-            if arrival.get("measuredAt"):
-                state["busArrivalMeasuredAt"] = iso(arrival["measuredAt"])
-            # 그다음 차. 없으면 안 싣는다 — 막차거나 배차가 뜸한 시간이다.
-            if arrival.get("thenAt"):
-                state["busArrivalThenAt"] = iso(arrival["thenAt"])
-                if arrival.get("thenStops") is not None:
-                    state["busArrivalThenStops"] = arrival["thenStops"]
+        put_arrival(state, arrival)
     return state
 
 
@@ -2808,6 +2792,25 @@ ARRIVAL_LEAD_SECONDS = 15 * 60
 ARRIVAL_WAITING_METERS = 150
 
 
+def leg_route_numbers(leg):
+    """그 구간에서 탈 수 있는 노선번호들. 없으면 빈 목록.
+
+    **`busNos` 가 있으면 그것, 없으면 `busNo` 하나.** 저장할 때 둘 다 쓴다 —
+    옛 서버·옛 앱이 만나도 첫 노선으로 내려앉게 하려는 것이다. `busNo` 하나에
+    `"163,6713"` 을 욱여넣으면 옛쪽이 그 문자열로 노선을 찾다 실패해 **칩이
+    통째로 사라진다.** 조용히 나빠지는 쪽을 피한다.
+
+    같은 번호는 한 번만 남긴다. 두 번 물으면 한도만 태운다.
+    """
+    raw = leg.get("busNos") or ([leg.get("busNo")] if leg.get("busNo") else [])
+    out = []
+    for no in raw:
+        text = str(no or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 def next_bus_leg(legs, progress, lat=None, lon=None):
     """다음에 **탈** 버스 구간. 없으면 None.
 
@@ -2827,7 +2830,7 @@ def next_bus_leg(legs, progress, lat=None, lon=None):
 
     # 지금 구간이 버스이고, 아직 그 승차 지점 근처에 서 있으면 그게 다음 버스다.
     current = legs[here]
-    if (current.get("mode") == "bus" and current.get("busNo")
+    if (current.get("mode") == "bus" and leg_route_numbers(current)
             and lat is not None and lon is not None):
         points = current.get("points") or []
         if points and haversine(lat, lon, points[0][0],
@@ -2835,7 +2838,7 @@ def next_bus_leg(legs, progress, lat=None, lon=None):
             return current
 
     for leg in legs[here + 1:]:
-        if leg.get("mode") == "bus" and leg.get("busNo"):
+        if leg.get("mode") == "bus" and leg_route_numbers(leg):
             return leg
     return None
 
@@ -2920,6 +2923,100 @@ def arrival_recently_measured(route_no, lat, lon, at):
     return (at - measured).total_seconds() < ARRIVAL_BURST_SECONDS, value
 
 
+def refresh_leg_arrivals(leg):
+    """그 구간의 노선을 **전부** 지금 당장 새로 묻는다. 돌려주는 것은 없다.
+
+    **`arrival_ready` 와 다르다.** 그쪽은 캐시에 있는 것만 쓰고 기다리지 않는다.
+    이쪽은 사람이 새로고침을 눌렀거나 화면이 30초마다 부르는 자리라 기다려도 된다.
+
+    2026-08-28 실측에서 드러난 자리다 — 칩은 두 노선을 합쳐 보여 주는데 이 길이
+    `busNo` 하나만 새로 물어서 **6713 만 뒤처졌다.** 값이 틀리지는 않았지만
+    한쪽만 신선했다.
+
+    방금 잰 노선은 건너뛴다(`ARRIVAL_BURST_SECONDS`). 몰아 눌러도 한도를 노선
+    수만큼 곱해 태우지 않는다.
+    """
+    points = (leg or {}).get("points") or []
+    if not points:
+        return
+    lat, lon = points[0][0], points[0][1]
+    for number in leg_route_numbers(leg):
+        burst, _ = arrival_recently_measured(number, lat, lon, now())
+        if burst:
+            log(f"  버스 {number} 도착 새로고침 건너뜀 — "
+                f"{ARRIVAL_BURST_SECONDS}초 안에 이미 물었다")
+            continue
+        # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
+        _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
+        value = bus_arrival(lat, lon, number)
+        _arrival_ready[(number, lat, lon)] = (now(), value)
+        log(f"  버스 {number} 도착 새로고침 → "
+            f"{iso(value['at']) if value else '없음'}")
+
+
+def merge_arrivals(values):
+    """여러 노선의 도착값을 **노선 상관없이 빠른 순 두 대**로 합친다.
+
+    돌려주는 것은 `bus_arrival` 과 **같은 모양에 `thenNo` 하나가 더 붙은 것**이다.
+    다 없으면 None.
+
+    **왜 노선별로 한 대씩이 아닌가.** 이 칩은 *뛸까 말까* 를 정하려고 본다.
+    163이 3분·6분 뒤이고 6713이 20분 뒤면, 알고 싶은 것은 앞의 둘이다.
+
+    `measuredAt` 은 **가장 최근 것**을 쓴다. 정류장 수의 나이를 재는 값이라
+    (`busArrivalStopsFresh`, 60초), 늙은 쪽을 쓰면 아직 참인 숫자가 먼저 감춰진다.
+    """
+    coming = []
+    latest = None
+    for value in values:
+        if not value:
+            continue
+        measured = value.get("measuredAt")
+        if measured and (latest is None or measured > latest):
+            latest = measured
+        coming.append((value["at"], value["no"], value.get("stops")))
+        if value.get("thenAt"):
+            coming.append((value["thenAt"], value["no"], value.get("thenStops")))
+    if not coming:
+        return None
+    coming.sort(key=lambda row: row[0])
+
+    at, no, stops = coming[0]
+    merged = {"no": no, "at": at, "stops": stops, "measuredAt": latest}
+    if len(coming) > 1:
+        then_at, then_no, then_stops = coming[1]
+        merged["thenAt"] = then_at
+        merged["thenNo"] = then_no
+        merged["thenStops"] = then_stops
+    return merged
+
+
+def put_arrival(state, arrival):
+    """합친 도착값을 상태에 싣는다. 없으면 아무것도 안 싣는다.
+
+    **`thenNo` 는 노선이 다를 때만 싣는다.** 같으면 화면이 `그다음` 으로 적는다 —
+    같은 번호를 두 번 적으면 눈이 시끄럽다.
+    """
+    if not arrival:
+        return
+    state["busArrivalNo"] = arrival["no"]
+    state["busArrivalAt"] = iso(arrival["at"])
+    if arrival.get("stops") is not None:
+        state["busArrivalStops"] = arrival["stops"]
+    # **정류장 수는 늙지 않는다.** 시각은 절대시각이라 시계가 흐르면 스스로
+    # 맞아 가는데, `5정류장 전` 은 그대로 남아 거짓이 된다(약 57초에 하나씩
+    # 줄었다, 2026-08-26 실측). 그래서 화면이 나이를 알아야 한다.
+    if arrival.get("measuredAt"):
+        state["busArrivalMeasuredAt"] = iso(arrival["measuredAt"])
+    # 그다음 차. 없으면 안 싣는다 — 막차거나 배차가 뜸한 시간이다.
+    if arrival.get("thenAt"):
+        state["busArrivalThenAt"] = iso(arrival["thenAt"])
+        if arrival.get("thenStops") is not None:
+            state["busArrivalThenStops"] = arrival["thenStops"]
+        if arrival.get("thenNo") and arrival["thenNo"] != arrival["no"]:
+            state["busArrivalThenNo"] = arrival["thenNo"]
+
+
 def arrival_pending(legs, progress, now=None, lat=None, lon=None):
     """**승차 창은 열렸는데 값이 아직 없나.** 그러면 그 노선번호, 아니면 None.
 
@@ -2935,7 +3032,8 @@ def arrival_pending(legs, progress, now=None, lat=None, lon=None):
     """
     at = now or datetime.now(timezone.utc)
     leg = next_bus_leg(legs, progress, lat, lon)
-    if not leg or not leg.get("busNo"):
+    numbers = leg_route_numbers(leg) if leg else []
+    if not numbers:
         return None
     if leg["startsAt"] - progress > ARRIVAL_LEAD_SECONDS:
         return None
@@ -2943,7 +3041,7 @@ def arrival_pending(legs, progress, now=None, lat=None, lon=None):
         return None
     if arrival_ready(legs, progress, now=at, lat=lat, lon=lon):
         return None
-    return str(leg["busNo"])
+    return numbers[0]
 
 
 def arrival_ready(legs, progress, now=None, lat=None, lon=None):
@@ -2972,26 +3070,29 @@ def arrival_ready(legs, progress, now=None, lat=None, lon=None):
         return arrival_says(legs, progress,
                             f"{leg['busNo']}번 구간에 좌표가 없다 — 승차 지점을 모른다")
     lat, lon = points[0][0], points[0][1]
-    key = (str(leg["busNo"]), lat, lon)
-    cached = _arrival_ready.get(key)
-    value = cached[1] if cached else None
+    numbers = leg_route_numbers(leg)
 
-    # **이미 지나간 시각은 주지 않는다.** 배경 갱신이 계속 실패하면 마지막으로
-    # 성공한 값이 그대로 남는데, 절대시각이라 시계가 흐르면 언젠가 과거가 된다.
-    # 그때 화면은 **이미 떠난 버스**를 `18:42 도착` 이라고 말한다.
-    #
-    # 창이 15분이라 최대 15분까지 그럴 수 있었다. 하필 정류장에서 기다리는
-    # 그 15분이다. 틀린 값을 그리는 것을 아무것도 안 그리는 것보다 나쁘게 본다.
-    #
-    # 지나갔으면 캐시가 신선하든 아니든 새로 묻는다 — 그다음 차가 알고 싶은 것이다.
-    #
-    # **엄격한 과거만 지난 것으로 본다.** 도착 시각이 정확히 지금이면 "지금 도착"
-    # 이고 그건 참이다. 거짓말이 되는 것은 이미 지나간 뒤부터다.
-    gone = value is not None and value["at"] < at
-    if gone:
-        value = None
-    elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
-        return value
+    # **노선마다 캐시를 본다.** 기다리지 않는다 — 없는 것은 배경에서 채운다.
+    found = []
+    for number in numbers:
+        cached = _arrival_ready.get((number, lat, lon))
+        value = cached[1] if cached else None
+
+        # **이미 지난 시각은 주지 않는다.** 배경 갱신이 계속 실패하면 마지막으로
+        # 성공한 값이 그대로 남는데, 절대시각이라 시계가 흐르면 언젠가 과거가
+        # 된다. 그때 화면은 **이미 떠난 버스**를 `18:42 도착` 이라고 말한다.
+        #
+        # 창이 15분이라 최대 15분까지 그럴 수 있었다. 하필 정류장에서 기다리는
+        # 그 15분이다. 틀린 값을 그리는 것을 아무것도 안 그리는 것보다 나쁘게 본다.
+        gone = value is not None and value["at"] < at
+        if gone:
+            value = None
+        elif cached and (at - cached[0]).total_seconds() < ARRIVAL_CACHE_SECONDS:
+            found.append(value)
+            continue
+        start_arrival_refresh(number, lat, lon)
+        found.append(value)
+    return merge_arrivals(found)
 
     start_arrival_refresh(leg["busNo"], lat, lon)
     return value
@@ -4057,22 +4158,7 @@ class Handler(BaseHTTPRequestHandler):
         route = route_of(session)
         leg = next_bus_leg(route["legs"], session["route_progress"] or 0,
                            session["last_lat"], session["last_lon"]) if route else None
-        points = (leg or {}).get("points") or []
-        if leg and points:
-            lat, lon = points[0][0], points[0][1]
-            burst, value = arrival_recently_measured(leg["busNo"], lat, lon, now())
-            if burst:
-                # 몰아 부른 것이다. 방금 잰 값을 그대로 쓴다 — 다시 물어도 같은
-                # 값이 오고, 공공데이터 한도만 태운다.
-                log(f"  버스 {leg['busNo']} 도착 새로고침 건너뜀 — "
-                    f"{ARRIVAL_BURST_SECONDS}초 안에 이미 물었다")
-            else:
-                # 캐시를 비워 진짜로 새로 묻게 한다. 누른 사람은 새 값을 원한다.
-                _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
-                value = bus_arrival(lat, lon, leg["busNo"])
-                _arrival_ready[(str(leg["busNo"]), lat, lon)] = (now(), value)
-                log(f"  버스 {leg['busNo']} 도착 새로고침 → "
-                    f"{iso(value['at']) if value else '없음'}")
+        refresh_leg_arrivals(leg)
 
         return self.reply(200, {"ok": True, "state": content_state(session)})
 

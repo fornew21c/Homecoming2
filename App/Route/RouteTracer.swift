@@ -44,14 +44,22 @@ struct RouteTracer {
         /// 구간이 자동차 경로에는 없었다.
         var busNo: String?
 
+        /// 이 구간에서 탈 수 있는 노선 전부. 편집기가 칩으로 받는다.
+        ///
+        /// `busNo` 는 그중 첫 번째다 — 선을 그리는 것과 옛 서버가 그 값을 쓴다.
+        var busNos: [String] = []
+
         init(id: UUID = UUID(), mode: RouteLeg.Mode, toName: String = "",
-             to: CLLocationCoordinate2D? = nil, minutes: Int = 5, busNo: String? = nil) {
+             to: CLLocationCoordinate2D? = nil, minutes: Int = 5,
+             busNo: String? = nil, busNos: [String] = []) {
             self.id = id
             self.mode = mode
             self.toName = toName
             self.to = to
             self.minutes = minutes
             self.busNo = busNo
+            // 하나만 준 옛 호출도 그대로 돈다.
+            self.busNos = busNos.isEmpty ? [busNo].compactMap { $0 } : busNos
         }
 
         // `CLLocationCoordinate2D` 는 Equatable 이 아니다. 좌표까지 봐야
@@ -59,6 +67,7 @@ struct RouteTracer {
         static func == (a: Step, b: Step) -> Bool {
             a.id == b.id && a.mode == b.mode && a.toName == b.toName
                 && a.minutes == b.minutes && a.busNo == b.busNo
+                && a.busNos == b.busNos
                 && a.to?.latitude == b.to?.latitude
                 && a.to?.longitude == b.to?.longitude
         }
@@ -163,7 +172,8 @@ struct RouteTracer {
                 seconds: seconds,
                 toName: step.toName.isEmpty ? nil : step.toName,
                 points: points,
-                busNo: step.mode == .bus ? step.busNo : nil
+                busNo: step.mode == .bus ? step.busNos.first ?? step.busNo : nil,
+                busNos: step.mode == .bus ? step.busNos : nil
             ))
             startsAt += seconds
             if step.mode.moves && !step.toName.isEmpty {
