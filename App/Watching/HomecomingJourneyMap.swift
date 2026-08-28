@@ -212,10 +212,27 @@ struct HomecomingJourneyMap: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(.white.opacity(0.12), lineWidth: 1)
             )
-            .onAppear { camera = .region(region(traveler: traveler, home: home)) }
+            // **사람이 만진 뒤에는 따라가지 않는다.**
+            //
+            // 아래 세 곳이 카메라를 전체 영역(`region()` — 귀가자 + 집 + 남은
+            // 경로를 담는 사각형 × 1.25)으로 다시 잡는다. 그중 좌표 갱신은
+            // **150m 마다** 오므로, 이동 중에 확대해 두면 몇십 초마다 28km 전체
+            // 보기로 되돌아갔다. 정류장 하나를 자세히 보려는 손을 계속 밀어냈다.
+            //
+            // `positionedByUser` 는 그 자리를 사람이 옮겼는지 알려 준다(iOS 17+).
+            // 이 값이 참이면 자동 추적을 멈추고, 대신 `귀가자` 버튼을 띄워 사람이
+            // 원할 때 돌아가게 한다 — 애플 지도가 같은 규칙을 쓴다.
+            //
+            // **돌아가는 길을 반드시 함께 둬야 한다.** 추적만 끄면 확대해 둔 사람이
+            // 귀가자를 잃고, 이 지도가 답하는 질문(*어디쯤인가*)이 사라진다.
+            .onAppear {
+                guard !camera.positionedByUser else { return }
+                camera = .region(region(traveler: traveler, home: home))
+            }
             // 좌표가 실제로 바뀐 갱신에서만 옮긴다. 단계나 문구만 바뀐 갱신에
             // 카메라를 다시 잡으면 사용자가 확대해 둔 것이 매번 풀린다.
             .onChange(of: TravelerFrame(traveler: traveler, home: home)) { _, frame in
+                guard !camera.positionedByUser else { return }
                 withAnimation(.easeInOut(duration: 0.4)) {
                     camera = .region(region(traveler: frame.traveler, home: frame.home))
                 }
@@ -224,8 +241,29 @@ struct HomecomingJourneyMap: View {
             // 선이 프레임 밖으로 잘리지 않는다 — 안 하면 처음 잡은 두 점 기준
             // 사각형에 갇혀 우회 구간이 화면 밖에 남는다.
             .onChange(of: geometry?.polyline.count ?? 0) { _, _ in
+                guard !camera.positionedByUser else { return }
                 withAnimation(.easeInOut(duration: 0.4)) {
                     camera = .region(region(traveler: traveler, home: home))
+                }
+            }
+            // 되돌아가는 버튼. **사람이 만진 뒤에만 뜬다** — 자동으로 따라가는
+            // 동안에는 누를 이유가 없고, 늘 떠 있으면 지도를 가린다.
+            .overlay(alignment: .bottomTrailing) {
+                if camera.positionedByUser {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            camera = .region(region(traveler: traveler, home: home))
+                        }
+                    } label: {
+                        Label(travelerName, systemImage: "location.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(12)
                 }
             }
 
