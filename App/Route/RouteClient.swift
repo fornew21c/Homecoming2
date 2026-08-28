@@ -74,7 +74,8 @@ struct RouteDetail: Sendable, Identifiable {
                     CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1])
                 } : nil,
                 minutes: max(1, leg.seconds / 60),
-                busNo: leg.busNo
+                busNo: leg.busNo,
+                busNos: leg.busNos ?? [leg.busNo].compactMap { $0 }
             )
         }
     }
@@ -203,9 +204,16 @@ struct RouteLeg: Sendable, Equatable, Codable {
     /// 노선번호가 사라지고 그 구간이 자동차 경로로 되돌아간다.
     var busNo: String?
 
+    /// 이 구간에서 탈 수 있는 노선 전부. 예: `["163", "6713"]`.
+    ///
+    /// **`busNo` 를 그대로 두고 이것을 더한다.** `busNo` 하나에 `"163,6713"` 을
+    /// 욱여넣으면 옛 서버가 그 문자열로 노선을 찾다 실패해 칩이 통째로 사라진다.
+    /// 지금처럼 둬야 옛쪽이 만나도 **첫 노선으로 내려앉는다.**
+    var busNos: [String]?
+
     // 서버는 `label` 도 함께 보내는데 그건 `mode` 에서 나오는 값이라 읽지 않는다.
     private enum CodingKeys: String, CodingKey {
-        case mode, startsAt, seconds, toName, points, busNo
+        case mode, startsAt, seconds, toName, points, busNo, busNos
     }
 
     /// 서버로 보낼 표현. 서버는 label 도 읽으므로 함께 넣는다.
@@ -219,6 +227,7 @@ struct RouteLeg: Sendable, Equatable, Codable {
         ]
         if let toName { out["toName"] = toName }
         if let busNo, !busNo.isEmpty { out["busNo"] = busNo }
+        if let busNos, !busNos.isEmpty { out["busNos"] = busNos }
         return out
     }
 }
