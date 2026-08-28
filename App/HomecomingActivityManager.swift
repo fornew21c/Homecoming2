@@ -260,6 +260,9 @@ final class HomecomingActivityManager {
             busArrivalAt: previous.busArrivalAt,
             busArrivalStops: previous.busArrivalStops,
             busArrivalMeasuredAt: previous.busArrivalMeasuredAt,
+            // **서버만 아는 값이다.** 안 옮기면 로컬 갱신 한 번에 지워진다 —
+            // 서버는 계속 보내는데 화면에서 사라진다.
+            busArrivalThenNo: previous.busArrivalThenNo,
             busArrivalThenAt: previous.busArrivalThenAt,
             busArrivalThenStops: previous.busArrivalThenStops
         )

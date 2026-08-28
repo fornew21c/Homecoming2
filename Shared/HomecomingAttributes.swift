@@ -227,6 +227,15 @@ struct HomecomingAttributes: ActivityAttributes {
         /// 앞차를 놓쳤을 때 얼마를 더 기다리는지가 뛸지 말지를 가른다 — 4분 뒤에
         /// 또 온다면 안 뛰어도 되고, 20분이면 뛰어야 한다. 실측에서 999번이
         /// 293초·1158초 두 대로 왔다(2026-08-26).
+        /// 그다음 차의 노선번호. **노선이 다를 때만 온다.**
+        ///
+        /// 한 구간에 노선이 여럿일 수 있다 — 국회의사당역 → 신촌로터리를 163 과
+        /// 6713 이 같이 간다(2026-08-28 실측). 두 줄은 노선 상관없이 빠른 순
+        /// 두 대라, 둘째 줄이 다른 노선일 수 있다.
+        ///
+        /// 같은 노선이면 안 온다. 그때 화면은 예전처럼 `그다음` 이라고 적는다.
+        var busArrivalThenNo: String?
+
         var busArrivalThenAt: Date?
 
         /// 그다음 차가 몇 정류장 앞인지. `busArrivalStops` 와 같은 이유로 늙는다.
@@ -546,6 +555,7 @@ extension HomecomingAttributes.ContentState {
         case busArrivalAt
         case busArrivalStops
         case busArrivalMeasuredAt
+        case busArrivalThenNo
         case busArrivalThenAt
         case busArrivalThenStops
     }
@@ -574,6 +584,7 @@ extension HomecomingAttributes.ContentState {
         busArrivalAt = try container.decodeWireDateIfPresent(forKey: .busArrivalAt)
         busArrivalStops = try container.decodeIfPresent(Int.self, forKey: .busArrivalStops)
         busArrivalMeasuredAt = try container.decodeWireDateIfPresent(forKey: .busArrivalMeasuredAt)
+        busArrivalThenNo = try container.decodeIfPresent(String.self, forKey: .busArrivalThenNo)
         busArrivalThenAt = try container.decodeWireDateIfPresent(forKey: .busArrivalThenAt)
         busArrivalThenStops = try container.decodeIfPresent(Int.self, forKey: .busArrivalThenStops)
     }
@@ -602,6 +613,7 @@ extension HomecomingAttributes.ContentState {
         try container.encodeWireIfPresent(busArrivalAt, forKey: .busArrivalAt)
         try container.encodeIfPresent(busArrivalStops, forKey: .busArrivalStops)
         try container.encodeWireIfPresent(busArrivalMeasuredAt, forKey: .busArrivalMeasuredAt)
+        try container.encodeIfPresent(busArrivalThenNo, forKey: .busArrivalThenNo)
         try container.encodeWireIfPresent(busArrivalThenAt, forKey: .busArrivalThenAt)
         try container.encodeIfPresent(busArrivalThenStops, forKey: .busArrivalThenStops)
     }
