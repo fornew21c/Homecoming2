@@ -355,7 +355,9 @@ struct RouteStripView: View {
                 GridRow {
                     // 아이콘 칸은 비운다 — 같은 노선이라 다시 그릴 것이 없다.
                     Text("")
-                    Text("그다음")
+                    // 노선이 다르면 번호를 적는다. 한 구간에 노선이 여럿일 수
+                    // 있어서 둘째 줄이 다른 노선일 수 있다(2026-08-28).
+                    Text(state.busArrivalThenNo.map { "\($0)번" } ?? "그다음")
                         .font(.system(size: 11, weight: .semibold))
                         .opacity(0.55)
                     Text(clock)

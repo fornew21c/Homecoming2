@@ -716,7 +716,10 @@ extension HomecomingAttributes.ContentState {
         guard let clock = busArrivalClockText else { return "\(no)번 · 도착 정보 아직 없음" }
         var line = "\(no)번 \(clock) 도착"
         if let stops = busArrivalStopsText { line += " · \(stops)" }
-        if let then = busArrivalThenClockText { line += " · 다음 \(then)" }
+        if let then = busArrivalThenClockText {
+            // 노선이 다르면 번호를 적는다. 같으면 `다음` 으로 충분하다.
+            line += busArrivalThenNo.map { " · \($0)번 \(then)" } ?? " · 다음 \(then)"
+        }
         return line
     }
 
