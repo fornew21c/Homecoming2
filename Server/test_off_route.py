@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 _TMP = tempfile.mkdtemp()
 os.environ["HOMECOMING_DB"] = str(pathlib.Path(_TMP) / "test.sqlite")
@@ -262,3 +263,48 @@ class SessionReuse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouteWithoutSpotTests(unittest.TestCase):
+    """`where_on_route` 가 자리를 못 집을 때 **관측 속도로 짐작하지 않는다.**
+
+    2026-08-28 에 화면의 도착예정이 잠깐 크게 틀렸다가 스스로 맞아졌다. 원인이
+    이 자리였다 —
+
+        세션 시작   경로가 있으면 planned_seconds 를 안 채운다(경로 없는 쪽만 채운다)
+        갱신       where_on_route 가 None → arrival 도 None
+                  `arrival is None and planned_seconds` 가 거짓
+                  → 관측 접근 속도 폴백으로 내려간다
+
+    **서버는 답을 알고 있다.** `route["total_seconds"]` 는 세션 시작에서 첫
+    도착예정을 만들 때 쓰는 값이고 앱이 쓰는 값과 같다.
+
+    폴백이 더 나쁘다는 근거는 이 파일의 머리글이 이미 갖고 있다.
+    """
+
+    def setUp(self):
+        for table in ("sessions", "routes", "fixes", "activities"):
+            hs.db().execute(f"DELETE FROM {table}")
+        hs.db().commit()
+        self.session = make_session("s3")
+
+    def test_자리를_못_집어도_경로의_시간_예산을_쓴다(self):
+        started = hs.parse_iso(self.session["started_at"])
+        at = hs.now()
+        # 좌표가 없는 경로처럼 자리를 못 집는 상황. 실제로는 경로에 좌표가
+        # 없거나(옛 경로) 계산이 실패할 때 이렇게 된다.
+        with mock.patch.object(hs, "where_on_route", lambda *_a: None):
+            row = hs.recompute(self.session, 37.5500, 126.9200, at)
+
+        got = hs.parse_iso(row["expected_arrival"])
+        want = started + timedelta(seconds=1800)      # 출발 + 경로의 30분
+        self.assertAlmostEqual(got.timestamp(), want.timestamp(), delta=2,
+                               msg=f"경로의 시간 예산이어야 한다: {got}")
+
+    def test_경로도_적어_둔_시간도_없으면_지금까지처럼_짐작한다(self):
+        """폴백 자체를 없애는 것이 아니다. 경로가 없는 귀가에는 그것밖에 없다."""
+        hs.db().execute("UPDATE sessions SET route_id = NULL WHERE id = ?", ("s3",))
+        hs.db().commit()
+        session = hs.db().execute("SELECT * FROM sessions WHERE id = ?", ("s3",)).fetchone()
+        row = hs.recompute(session, 37.5500, 126.9200, hs.now())
+        self.assertIsNotNone(row["expected_arrival"])

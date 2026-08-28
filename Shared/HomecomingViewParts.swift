@@ -89,6 +89,15 @@ struct RouteStripView: View {
 
     @State private var refreshing = false
 
+    /// 새로고침 화살표의 각도. 도는 동안 0 → 360 을 되풀이한다.
+    @State private var refreshAngle: Double = 0
+
+    /// 화살표 한 바퀴만큼의 시간. 회전 애니메이션과 같은 값이어야 한다 —
+    /// 다르면 반 바퀴에서 끊긴다.
+    private static func oneTurn() async {
+        try? await Task.sleep(for: .seconds(0.8))
+    }
+
     /// 노선도 위의 지금 자리.
     ///
     /// **지나온 거리는 서버가 준다.** `state.travelledMeters` 다. 지도의 지나온/남은
@@ -393,16 +402,34 @@ struct RouteStripView: View {
                 guard !refreshing else { return }
                 refreshing = true
                 Task {
-                    await onRefreshBusArrival()
+                    // **한 바퀴는 돌게 둔다.** 서버가 30초 캐시라 값이 즉시 올 때가
+                    // 많은데, 그러면 화살표가 몇십 밀리초 깜박이고 끝난다 — 눌렀는데
+                    // 아무 일도 안 일어난 것처럼 보인다. 한 바퀴(0.8초)를 채운다.
+                    async let asked: Void = onRefreshBusArrival()
+                    async let turned: Void = Self.oneTurn()
+                    _ = await (asked, turned)
                     refreshing = false
                 }
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10, weight: .bold))
-                    .rotationEffect(.degrees(refreshing ? 360 : 0))
-                    .animation(refreshing
-                               ? .linear(duration: 0.8).repeatForever(autoreverses: false)
-                               : .default, value: refreshing)
+                    .rotationEffect(.degrees(refreshAngle))
+            }
+            // **`withAnimation` 으로 시작해야 되풀이된다.**
+            //
+            // 예전에는 `.animation(.repeatForever, value: refreshing)` 이었다.
+            // 그 꼴은 값이 바뀌는 순간 한 번만 돌고 멈춘다 — 되풀이가 안 붙는다.
+            // 그래서 "로딩 중인데 화살표가 안 돈다" 로 보였다.
+            .onChange(of: refreshing) { _, spinning in
+                if spinning {
+                    withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
+                        refreshAngle = 360
+                    }
+                } else {
+                    // 되풀이 애니메이션을 끊고 제자리로. 값을 0 으로 되돌리는 것이
+                    // 곧 멈추는 것이다.
+                    withAnimation(.easeOut(duration: 0.2)) { refreshAngle = 0 }
+                }
             }
             .buttonStyle(.plain)
             .padding(.leading, 1)

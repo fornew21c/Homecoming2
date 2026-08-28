@@ -3705,6 +3705,22 @@ def recompute(session, lat, lon, at):
         # 시각을 덮으면, 물어본 뜻이 없어진다.
         started_at = parse_iso(session["started_at"]) or now()
         arrival = started_at + timedelta(seconds=int(session["planned_seconds"]))
+    elif arrival is None and route:
+        # **경로가 있으면 자리를 못 집어도 시간 예산은 안다.**
+        #
+        # `planned_seconds` 는 **경로 없는 귀가에만** 채워진다(`handle_session_start`).
+        # 그래서 경로가 있는 세션에서 `where_on_route` 가 자리를 못 집으면 위
+        # 분기가 거짓이 되어 아래 관측 속도 폴백으로 떨어졌다 — 서버가 답을
+        # 갖고 있는데도.
+        #
+        # 2026-08-28 에 화면의 도착예정이 잠깐 크게 틀렸다가 스스로 맞아졌다.
+        # 시험으로 되재니 22분 차이였다. 자리를 다시 집는 순간 위쪽 블록이
+        # 값을 덮으니 저절로 맞아진 것이고, 그래서 원인이 안 보였다.
+        #
+        # 쓰는 값은 세션 시작에서 첫 도착예정을 만들 때와 **같다**
+        # (`started + route.total_seconds`). 앱이 쓰는 값과도 같다.
+        started_at = parse_iso(session["started_at"]) or now()
+        arrival = started_at + timedelta(seconds=int(route["total_seconds"]))
     elif arrival is None:
         # 폴백 — 저장된 경로도 없고 적어 둔 시간도 없다. 관측 접근 속도로 짐작한다.
         # 여기서 도착예정이 크게 튀는 걸 막는 게 MIN_OBSERVED_SPEED 와 ETA_OBSERVED_LIMIT 다.
