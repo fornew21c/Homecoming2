@@ -2808,6 +2808,25 @@ ARRIVAL_LEAD_SECONDS = 15 * 60
 ARRIVAL_WAITING_METERS = 150
 
 
+def leg_route_numbers(leg):
+    """그 구간에서 탈 수 있는 노선번호들. 없으면 빈 목록.
+
+    **`busNos` 가 있으면 그것, 없으면 `busNo` 하나.** 저장할 때 둘 다 쓴다 —
+    옛 서버·옛 앱이 만나도 첫 노선으로 내려앉게 하려는 것이다. `busNo` 하나에
+    `"163,6713"` 을 욱여넣으면 옛쪽이 그 문자열로 노선을 찾다 실패해 **칩이
+    통째로 사라진다.** 조용히 나빠지는 쪽을 피한다.
+
+    같은 번호는 한 번만 남긴다. 두 번 물으면 한도만 태운다.
+    """
+    raw = leg.get("busNos") or ([leg.get("busNo")] if leg.get("busNo") else [])
+    out = []
+    for no in raw:
+        text = str(no or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 def next_bus_leg(legs, progress, lat=None, lon=None):
     """다음에 **탈** 버스 구간. 없으면 None.
 

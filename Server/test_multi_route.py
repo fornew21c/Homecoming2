@@ -76,5 +76,35 @@ class MergeArrivalsTests(unittest.TestCase):
         self.assertEqual(merged["measuredAt"], merged["at"] - timedelta(minutes=3))
 
 
+class LegRouteNumbersTests(unittest.TestCase):
+    """**`busNos` 가 있으면 그것, 없으면 `busNo` 하나.**
+
+    저장할 때 둘 다 쓴다. 옛 서버·옛 앱이 만나도 첫 노선으로 내려앉게 하려는
+    것이다 — `busNo` 하나에 `"163,6713"` 을 욱여넣으면 옛쪽이 그 문자열로
+    노선을 찾다 실패해 칩이 통째로 사라진다.
+    """
+
+    def test_busNos_가_있으면_그것을_쓴다(self):
+        leg = {"busNo": "163", "busNos": ["163", "6713"]}
+        self.assertEqual(hs.leg_route_numbers(leg), ["163", "6713"])
+
+    def test_busNos_가_없으면_busNo_하나다(self):
+        self.assertEqual(hs.leg_route_numbers({"busNo": "163"}), ["163"])
+
+    def test_빈_값은_거른다(self):
+        leg = {"busNo": "163", "busNos": ["163", "", "  ", None, "6713"]}
+        self.assertEqual(hs.leg_route_numbers(leg), ["163", "6713"])
+
+    def test_같은_번호는_한_번만(self):
+        # 두 번 물으면 한도만 태운다.
+        leg = {"busNos": ["163", "163", "6713"]}
+        self.assertEqual(hs.leg_route_numbers(leg), ["163", "6713"])
+
+    def test_아무것도_없으면_빈_목록(self):
+        self.assertEqual(hs.leg_route_numbers({}), [])
+        self.assertEqual(hs.leg_route_numbers({"busNo": ""}), [])
+        self.assertEqual(hs.leg_route_numbers({"busNos": []}), [])
+
+
 if __name__ == "__main__":
     unittest.main()
