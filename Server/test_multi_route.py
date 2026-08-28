@@ -152,5 +152,30 @@ class ArrivalReadyMultiTests(unittest.TestCase):
         self.assertEqual(sorted(asked), ["163", "6713"])
 
 
+class ThenNoWireTests(unittest.TestCase):
+    """둘째 줄의 노선번호가 상태에 실린다."""
+
+    def test_노선이_다르면_thenNo_가_실린다(self):
+        merged = hs.merge_arrivals([value("163", 12, 5), value("6713", 3, 1)])
+        state = {}
+        hs.put_arrival(state, merged)
+        self.assertEqual(state["busArrivalNo"], "6713")
+        self.assertEqual(state["busArrivalThenNo"], "163")
+
+    def test_같은_노선이면_thenNo_를_안_싣는다(self):
+        # 화면이 `그다음` 으로 적는다. 번호를 두 번 적으면 눈이 시끄럽다.
+        merged = hs.merge_arrivals([value("163", 3, 1, then_minutes=6, then_stops=3)])
+        state = {}
+        hs.put_arrival(state, merged)
+        self.assertEqual(state["busArrivalNo"], "163")
+        self.assertNotIn("busArrivalThenNo", state)
+
+    def test_그다음이_없으면_아무것도_안_싣는다(self):
+        state = {}
+        hs.put_arrival(state, hs.merge_arrivals([value("163", 3, 1)]))
+        self.assertNotIn("busArrivalThenAt", state)
+        self.assertNotIn("busArrivalThenNo", state)
+
+
 if __name__ == "__main__":
     unittest.main()

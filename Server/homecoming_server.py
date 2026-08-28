@@ -2251,23 +2251,7 @@ def content_state(session):
                 # 창이 열리자마자 번호가 실리니 **자료가 나오는 즉시** 채워진다.
                 # 2026-08-27 에 10분 걸린 자리가 30초로 줄어든다.
                 state["busArrivalNo"] = waiting
-        if arrival:
-            state["busArrivalNo"] = arrival["no"]
-            state["busArrivalAt"] = iso(arrival["at"])
-            if arrival["stops"] is not None:
-                state["busArrivalStops"] = arrival["stops"]
-            # **정류장 수는 늙지 않는다.** 시각은 절대시각이라 시계가 흐르면
-            # 스스로 맞아 가는데, `5정류장 전` 은 그대로 남아 거짓이 된다.
-            #
-            # 2026-08-26 실측: 15:36 에 5, 15:37:55 에 3 — 약 60초에 한 정류장이다.
-            # 그래서 화면이 나이를 알아야 하고, 낡으면 그 숫자만 감춘다.
-            if arrival.get("measuredAt"):
-                state["busArrivalMeasuredAt"] = iso(arrival["measuredAt"])
-            # 그다음 차. 없으면 안 싣는다 — 막차거나 배차가 뜸한 시간이다.
-            if arrival.get("thenAt"):
-                state["busArrivalThenAt"] = iso(arrival["thenAt"])
-                if arrival.get("thenStops") is not None:
-                    state["busArrivalThenStops"] = arrival["thenStops"]
+        put_arrival(state, arrival)
     return state
 
 
@@ -2974,6 +2958,32 @@ def merge_arrivals(values):
         merged["thenNo"] = then_no
         merged["thenStops"] = then_stops
     return merged
+
+
+def put_arrival(state, arrival):
+    """합친 도착값을 상태에 싣는다. 없으면 아무것도 안 싣는다.
+
+    **`thenNo` 는 노선이 다를 때만 싣는다.** 같으면 화면이 `그다음` 으로 적는다 —
+    같은 번호를 두 번 적으면 눈이 시끄럽다.
+    """
+    if not arrival:
+        return
+    state["busArrivalNo"] = arrival["no"]
+    state["busArrivalAt"] = iso(arrival["at"])
+    if arrival.get("stops") is not None:
+        state["busArrivalStops"] = arrival["stops"]
+    # **정류장 수는 늙지 않는다.** 시각은 절대시각이라 시계가 흐르면 스스로
+    # 맞아 가는데, `5정류장 전` 은 그대로 남아 거짓이 된다(약 57초에 하나씩
+    # 줄었다, 2026-08-26 실측). 그래서 화면이 나이를 알아야 한다.
+    if arrival.get("measuredAt"):
+        state["busArrivalMeasuredAt"] = iso(arrival["measuredAt"])
+    # 그다음 차. 없으면 안 싣는다 — 막차거나 배차가 뜸한 시간이다.
+    if arrival.get("thenAt"):
+        state["busArrivalThenAt"] = iso(arrival["thenAt"])
+        if arrival.get("thenStops") is not None:
+            state["busArrivalThenStops"] = arrival["thenStops"]
+        if arrival.get("thenNo") and arrival["thenNo"] != arrival["no"]:
+            state["busArrivalThenNo"] = arrival["thenNo"]
 
 
 def arrival_pending(legs, progress, now=None, lat=None, lon=None):
