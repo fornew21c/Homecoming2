@@ -2920,6 +2920,43 @@ def arrival_recently_measured(route_no, lat, lon, at):
     return (at - measured).total_seconds() < ARRIVAL_BURST_SECONDS, value
 
 
+def merge_arrivals(values):
+    """여러 노선의 도착값을 **노선 상관없이 빠른 순 두 대**로 합친다.
+
+    돌려주는 것은 `bus_arrival` 과 **같은 모양에 `thenNo` 하나가 더 붙은 것**이다.
+    다 없으면 None.
+
+    **왜 노선별로 한 대씩이 아닌가.** 이 칩은 *뛸까 말까* 를 정하려고 본다.
+    163이 3분·6분 뒤이고 6713이 20분 뒤면, 알고 싶은 것은 앞의 둘이다.
+
+    `measuredAt` 은 **가장 최근 것**을 쓴다. 정류장 수의 나이를 재는 값이라
+    (`busArrivalStopsFresh`, 60초), 늙은 쪽을 쓰면 아직 참인 숫자가 먼저 감춰진다.
+    """
+    coming = []
+    latest = None
+    for value in values:
+        if not value:
+            continue
+        measured = value.get("measuredAt")
+        if measured and (latest is None or measured > latest):
+            latest = measured
+        coming.append((value["at"], value["no"], value.get("stops")))
+        if value.get("thenAt"):
+            coming.append((value["thenAt"], value["no"], value.get("thenStops")))
+    if not coming:
+        return None
+    coming.sort(key=lambda row: row[0])
+
+    at, no, stops = coming[0]
+    merged = {"no": no, "at": at, "stops": stops, "measuredAt": latest}
+    if len(coming) > 1:
+        then_at, then_no, then_stops = coming[1]
+        merged["thenAt"] = then_at
+        merged["thenNo"] = then_no
+        merged["thenStops"] = then_stops
+    return merged
+
+
 def arrival_pending(legs, progress, now=None, lat=None, lon=None):
     """**승차 창은 열렸는데 값이 아직 없나.** 그러면 그 노선번호, 아니면 None.
 
