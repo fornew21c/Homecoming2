@@ -35,9 +35,79 @@ struct ContentView: View {
 
     @State private var tab: Tab = .journey
 
+    /// `귀가` 탭에서 지금 보고 있는 쪽.
+    ///
+    /// **기억하지 않는다.** 앱을 열면 늘 `지도` 다 — 가족이 앱을 여는 이유가
+    /// *어디쯤인가* 이고, *얼마나 남았나* 는 잠금화면과 아일랜드에 이미 있다.
+    /// 기억하면 어제 카드를 보고 끝낸 사람이 오늘 지도를 못 본다.
+    enum JourneyFace: Hashable { case map, cards }
+
+    @State private var journeyFace: JourneyFace = .map
+
+    /// 지도를 좌우로 넘길 때 지금 페이지. 부제가 이걸 따라 바뀐다.
+    @State private var mapPage: String?
+
+    /// 지금 화면에 있는 귀가들 — **남의 것 먼저, 내 것 나중.**
+    ///
+    /// 지도가 두 곳에서 나오기 때문에 한 줄로 모은다. 둘 다
+    /// `HomecomingJourneySection` 이다.
+    ///
+    /// **귀가자 본인도 자기 지도를 본다.** 이유는 그 뷰의 주석에 있다 — 귀가자가
+    /// 보는 것은 자기 상태가 아니라 가족에게 나가고 있는 그림이라, 좌표가 틀려도
+    /// (4km 어긋난 집을 `집` 이라고 그리던 일) 본인 화면에서 드러나야 한다.
+    private var journeys: [HomecomingJourneySection] {
+        otherJourneys + [myJourney].compactMap { $0 }
+    }
+
+    /// 내가 지켜보는 사람들의 귀가. 여러 명일 수 있다.
+    private var otherJourneys: [HomecomingJourneySection] {
+        environment.watching.entries.map { entry in
+            HomecomingJourneySection(
+                attributes: entry.attributes,
+                state: entry.state,
+                lastFixedAt: entry.receivedAt,
+                sessionID: entry.attributes.sessionID,
+                routes: environment.routeGeometry)
+        }
+    }
+
+    /// 내 귀가. 알림이 돌고 있을 때만 있다.
+    ///
+    /// **가족 쪽과 같은 뷰다.** `routeShape != nil` 조건을 걸지 않는다 — 걸면 경로
+    /// 없는 귀가에서 내 화면만 비어, 가족이 보는 것과 달라진다. 카드는 경로가
+    /// 없으면 진행 바를 그리고, 지도는 좌표가 없으면 스스로 사라진다.
+    private var myJourney: HomecomingJourneySection? {
+        guard activity.isRunning,
+              let attributes = activity.currentAttributes,
+              let state = activity.currentState else { return nil }
+        return HomecomingJourneySection(
+            attributes: attributes,
+            state: state,
+            lastFixedAt: coordinator.lastReportedAt,
+            // **귀가자만 넘긴다.** 가족은 남의 세션을 새로 조회할 수 없고,
+            // 눌러도 아무 일 없는 버튼은 없는 것보다 나쁘다.
+            onRefreshBusArrival: { await coordinator.refreshBusArrival() },
+            // 액티비티 고정값이 아니라 코디네이터의 값을 쓴다. 첫 출발에서는
+            // 액티비티가 세션보다 먼저 떠서 고정값이 비어 있다.
+            sessionID: coordinator.sessionID,
+            routes: environment.routeGeometry)
+    }
+
+    /// 지도를 그릴 수 있는 귀가들. **좌표 없는 것은 뺀다.**
+    ///
+    /// `HomecomingJourneyMap` 은 좌표가 없으면 스스로 아무것도 그리지 않으므로,
+    /// 그대로 두면 빈 페이지가 생긴다. 이게 비면 세그먼트 자체를 안 보인다.
+    private var mappableJourneys: [HomecomingJourneySection] {
+        journeys.filter { $0.state.travelerCoordinate != nil }
+    }
+
     var body: some View {
         TabView(selection: $tab) {
-            page("귀가", subtitle: "귀가 과정을 가족에게 실시간으로") { journeyTab }
+            page("귀가", subtitle: journeySubtitle,
+                 // 지도 쪽은 스크롤하지 않는다. 카드 쪽은 그대로 스크롤된다.
+                 scrolls: !(splitsJourney && journeyFace == .map)) { journeyTab }
+                .busArrivalTicker(activity: activity, coordinator: coordinator,
+                                  sawBusArrival: $sawBusArrival)
                 .tabItem { Label("귀가", systemImage: "figure.walk.motion") }
                 .tag(Tab.journey)
 
@@ -87,8 +157,14 @@ struct ContentView: View {
     /// 보면 지금 어느 탭인지 놓친다. `NavigationStack` 의 큰 제목을 쓰지 않는
     /// 이유는 이 화면이 자기 배경(어두운 그라디언트)을 직접 그리기 때문이다 —
     /// 내비게이션 바가 그 위에 자기 배경을 또 얹는다.
+    /// `scrolls: false` 는 내용이 **남는 공간을 통째로 쓰고 스크롤하지 않는다**는 뜻이다.
+    ///
+    /// `귀가` 탭의 `지도` 쪽이 그렇다. 지도를 스크롤 안에 두면 지도의 드래그와
+    /// 페이지 스크롤이 같은 손짓을 다툰다 — 지도가 620pt 를 차지하니 스크롤을
+    /// 잡을 자리가 거의 없었다(2026-08-28 에 고친 것이 그것이다).
     private func page<Content: View>(
-        _ title: String, subtitle: String? = nil, @ViewBuilder _ content: () -> Content
+        _ title: String, subtitle: String? = nil, scrolls: Bool = true,
+        @ViewBuilder _ content: () -> Content
     ) -> some View {
         ZStack {
             LinearGradient(
@@ -98,7 +174,7 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            ScrollView {
+            conditionalScroll(scrolls) {
                 VStack(spacing: 22) {
                     // **`alignment: .leading` 이 있어야 한다.** 없으면 VStack 이
                     // 자기 안에서 가운데를 잡아, 짧은 제목이 긴 부제 폭의 가운데로
@@ -123,17 +199,92 @@ struct ContentView: View {
         }
     }
 
-    /// 지금 벌어지는 일. 가족이 보는 카드가 맨 위다.
+    /// `scrolls` 면 `ScrollView`, 아니면 남는 공간을 다 쓰는 그냥 담기.
+    ///
+    /// 두 갈래를 `if` 로 쓰면 SwiftUI 가 다른 뷰로 보고 상태를 버린다 — 세그먼트를
+    /// 옮길 때마다 지도의 카메라가 초기화된다. `ViewBuilder` 로 감싸도 같으니
+    /// 여기서 한 번만 갈라 둔다.
+    @ViewBuilder
+    private func conditionalScroll<Content: View>(
+        _ scrolls: Bool, @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        if scrolls {
+            ScrollView { content() }
+        } else {
+            content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    /// `귀가` 탭. 지도와 카드를 상단에서 가른다.
+    ///
+    /// **가르는 이유는 손짓이 다투기 때문이다.** 예전에는 지도와 카드가 한
+    /// `ScrollView` 에 쌓여 있었다. 지도가 620pt 를 차지하고 그 안의 드래그는
+    /// 지도가 가져가니, 페이지를 스크롤하려면 지도 밖 좁은 데를 잡아야 했다.
     @ViewBuilder
     private var journeyTab: some View {
-        watchingSection
-        if hasWatching {
+        if splitsJourney {
+            journeyFacePicker
+        }
+        if splitsJourney && journeyFace == .map {
+            journeyMapPager
+        } else {
+            journeyCards
+        }
+    }
+
+    /// 가를 것이 있는가. 그릴 수 있는 지도가 하나라도 있어야 한다.
+    ///
+    /// 없으면 세그먼트를 안 보이고 지금까지처럼 카드만 스크롤된다 — 귀가를
+    /// 시작하기 전 화면이 그것이다. **누를 것이 없는 세그먼트는 없는 것보다 나쁘다.**
+    private var splitsJourney: Bool { !mappableJourneys.isEmpty }
+
+    private var journeyFacePicker: some View {
+        Picker("", selection: $journeyFace) {
+            Text("지도").tag(JourneyFace.map)
+            Text("카드").tag(JourneyFace.cards)
+        }
+        .pickerStyle(.segmented)
+    }
+
+    /// 지도들. 여럿이면 좌우로 넘긴다.
+    ///
+    /// **세로로 쌓지 않는다.** 지켜보는 사람 둘이 동시에 귀가하고 내가 귀가 중이면
+    /// 지도가 세 벌인데, 세로로 쌓으면 1,860pt 라 스크롤이 그대로 돌아온다.
+    private var journeyMapPager: some View {
+        let all = mappableJourneys
+        return TabView(selection: $mapPage) {
+            ForEach(all) { journey in
+                journey.map.tag(Optional(journey.id))
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: all.count > 1 ? .automatic : .never))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 페이지가 사라지면(귀가 종료) 선택이 허공을 가리켜 화면이 빈다.
+        .onChange(of: all.map(\.id)) { _, ids in
+            if mapPage == nil || !ids.contains(mapPage!) { mapPage = ids.first }
+        }
+        .onAppear { if mapPage == nil { mapPage = all.first?.id } }
+    }
+
+    /// 카드들. 지금까지의 `귀가` 탭에서 지도만 뺀 것이다.
+    @ViewBuilder
+    private var journeyCards: some View {
+        // **가족이 보는 것이 맨 위다.** 가족이 앱을 여는 이유가 그것뿐이다.
+        let others = otherJourneys
+        ForEach(others) { $0.card }
+        let idle = others.isEmpty && !environment.pairing.watching.isEmpty
+        if idle {
+            WatchingIdleCard(names: environment.pairing.watching.map(\.name))
+        }
+        // 위에 남의 것이 있을 때만 내 것을 라벨로 가른다. 아무것도 없으면
+        // 가를 것이 없다.
+        if !others.isEmpty || idle {
             Text("내 귀가")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.45))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        travelerStripCard
+        if let mine = myJourney { mine.card }
         runStatusCard
         plannedJourneyCard
         controls
@@ -144,6 +295,21 @@ struct ContentView: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// `귀가` 탭의 부제. 지켜볼 것이 있으면 **지금 보고 있는 귀가**를 적는다.
+    ///
+    /// 지도만 보다가 카드로 옮기지 않아도 제일 궁금한 값이 보이게 하는 것이다.
+    /// `arrivalClockText` 는 이미 있는 값이다 — 새로 만들지 않는다.
+    private var journeySubtitle: String {
+        let all = mappableJourneys
+        guard !all.isEmpty else { return "귀가 과정을 가족에게 실시간으로" }
+        let shown = all.first { $0.id == mapPage } ?? all[0]
+        let state = shown.state
+        if state.stage.isFinished {
+            return "\(shown.attributes.travelerName) · \(shown.attributes.destinationName)에 도착"
+        }
+        return "\(shown.attributes.travelerName) · \(state.arrivalClockText) 도착 예정"
     }
 
     /// 집과 경로. **집이 먼저다** — 경로의 마지막 구간 도착지가 집이라,
@@ -195,105 +361,13 @@ struct ContentView: View {
 
     // MARK: - 가족이 보는 영역
 
-    /// 지켜보는 사람이 있으면 **맨 위에** 온다.
-    /// 가족이 앱을 여는 이유가 그것뿐이기 때문이다.
-    @ViewBuilder
-    private var watchingSection: some View {
-        let entries = environment.watching.entries
-        if !entries.isEmpty {
-            VStack(spacing: 12) {
-                ForEach(entries) { entry in
-                    HomecomingJourneySection(
-                        attributes: entry.attributes,
-                        state: entry.state,
-                        lastFixedAt: entry.receivedAt,
-                        sessionID: entry.attributes.sessionID,
-                        routes: environment.routeGeometry
-                    )
-                }
-            }
-        } else if !environment.pairing.watching.isEmpty {
-            WatchingIdleCard(names: environment.pairing.watching.map(\.name))
-        }
-    }
-
-    private var hasWatching: Bool {
-        !environment.watching.entries.isEmpty || !environment.pairing.watching.isEmpty
-    }
-
     // MARK: - 구성 요소
 
-    /// 귀가자가 보는 카드. `watchingSection` 이 가족에게 그리는 것과 **같은
-    /// `HomecomingJourneyCard` 다.** 배지·문구·카운트다운·노선도까지 글자 하나 안
-    /// 틀리게 같아야 "가족에게 이렇게 보인다"는 확인이 참말이 된다 — 따로
-    /// `RouteStripView` 만 떼어 그리면 배경·문구가 가족 화면과 갈라질 수 있다.
-    ///
-    /// `statusCard` 와 섞지 않는다. 그쪽은 조종석이다(가족에게 보이는 이름,
-    /// 추정 출처, 관측 보정, 전송 상태). 진단값과 공유되는 그림은 성격이 다르다.
     /// 이번 귀가에서 **버스 도착 칩이 한 번이라도 떴는가.**
     ///
     /// 떴던 적이 있으면 값이 잠깐 비어도 계속 묻는다 — 안 그러면 스스로 못
     /// 되찾는다. 세션이 바뀌면 타이머가 다시 시작되므로 그때 꺼진다.
     @State private var sawBusArrival = false
-
-    @ViewBuilder
-    private var travelerStripCard: some View {
-        if activity.isRunning,
-           let attributes = activity.currentAttributes,
-           let state = activity.currentState {
-            // **가족 쪽과 같은 뷰다.** `routeShape != nil` 조건을 여기서 걸지
-            // 않는다 — 걸면 경로 없는 귀가에서 귀가자 화면만 비어, 가족이 보는
-            // 것과 달라진다. 카드는 경로가 없으면 진행 바를 그리고, 지도는
-            // 좌표가 없으면 스스로 사라진다. 판단은 뷰가 한다.
-            HomecomingJourneySection(
-                attributes: attributes,
-                state: state,
-                lastFixedAt: coordinator.lastReportedAt,
-                // **귀가자만 넘긴다.** 가족 카드(`watchingSection`)는 이 값을
-                // 안 넘기므로 버튼이 안 그려진다.
-                onRefreshBusArrival: { await coordinator.refreshBusArrival() },
-                // 액티비티 고정값이 아니라 코디네이터의 값을 쓴다. 첫 출발에서는
-                // 액티비티가 세션보다 먼저 떠서 고정값이 비어 있다.
-                sessionID: coordinator.sessionID,
-                routes: environment.routeGeometry
-            )
-            // **서 있는 동안에는 아무것도 갱신을 안 일으킨다.** 갱신의 유일한
-            // 계기가 위치 보고인데 그건 150m 를 움직여야 나간다 — 정류장에서
-            // 버스를 기다리는 그 시간이 정확히 그 상태다. 그래서 화면이 앞에
-            // 있는 동안만 스스로 다시 묻는다.
-            //
-            // **한 번이라도 칩이 떴으면 계속 묻는다.** 예전에는 `busArrivalNo`
-            // 가 있을 때만 돌았는데, 그러면 값이 잠깐 비는 순간 타이머가 스스로
-            // 꺼진다 — 그리고 값을 되찾으려면 물어봐야 하는데 물지 않으니
-            // 못 되찾는다.
-            //
-            // 2026-08-27 실귀가에서 그렇게 됐다. 18:34:09 에 자료가 값을 못
-            // 줬고, 그 뒤 5분 동안 `/bus-arrival` 호출이 **한 번도 없었다.**
-            // 사용자가 `↻` 를 눌러서야 돌아왔다. 버스를 기다리던 그 5분이다.
-            //
-            // 한 번도 안 뜬 구간(노선번호가 비었거나 승차 15분 전이 아니거나)
-            // 에서는 여전히 안 묻는다. 그게 원래 막으려던 것이다.
-            //
-            // 30초는 서버 캐시와 같은 주기다. 더 자주 불러도 같은 값이 온다.
-            .task(id: attributes.sessionID) {
-                // **세션마다 처음부터 센다.** 지난 귀가에서 떴다는 이유로 이번
-                // 귀가의 첫 구간부터 묻기 시작하면 안 된다.
-                //
-                // 화면에 들어올 때 이미 떠 있을 수도 있다(잠금화면에서 앱으로
-                // 넘어온 경우). `onChange` 는 바뀔 때만 오므로 여기서 한 번 본다.
-                sawBusArrival = state.busArrivalNo != nil
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(30))
-                    guard !Task.isCancelled else { return }
-                    guard sawBusArrival else { continue }
-                    await coordinator.refreshBusArrival()
-                }
-            }
-            .onChange(of: state.busArrivalNo) { _, no in
-                if no != nil { sawBusArrival = true }
-            }
-        }
-    }
 
     /// 데모는 경로가 필요 없다 — 가짜 이동을 재생할 뿐이다.
     ///
@@ -1041,5 +1115,65 @@ private struct SmallButton: View {
                 )
                 .foregroundStyle(.white.opacity(0.85))
         }
+    }
+}
+
+/// 버스 도착 칩을 스스로 다시 묻는 30초 타이머.
+///
+/// **`귀가` 탭에 붙는다. 카드가 아니다.** 예전에는 귀가자 카드에 붙어 있었는데,
+/// 2026-08-28 에 탭을 `지도 | 카드` 로 가르면서 카드가 화면에서 사라질 수 있게
+/// 됐다 — 그러면 지도를 보며 버스를 기다리는 동안 타이머가 죽는다. 목적이
+/// *"화면이 앞에 있는 동안"* 이므로 탭의 것이 맞다.
+///
+/// **서 있는 동안에는 아무것도 갱신을 안 일으킨다.** 갱신의 유일한 계기가 위치
+/// 보고인데 그건 150m 를 움직여야 나간다 — 정류장에서 버스를 기다리는 그 시간이
+/// 정확히 그 상태다.
+///
+/// **한 번이라도 칩이 떴으면 계속 묻는다.** 예전에는 `busArrivalNo` 가 있을 때만
+/// 돌았는데, 그러면 값이 잠깐 비는 순간 타이머가 스스로 꺼진다 — 그리고 값을
+/// 되찾으려면 물어봐야 하는데 물지 않으니 못 되찾는다.
+///
+/// 2026-08-27 실귀가에서 그렇게 됐다. 18:34:09 에 자료가 값을 못 줬고, 그 뒤 5분
+/// 동안 `/bus-arrival` 호출이 **한 번도 없었다.** 사용자가 `↻` 를 눌러서야
+/// 돌아왔다. 버스를 기다리던 그 5분이다.
+///
+/// 한 번도 안 뜬 구간(노선번호가 비었거나 승차 15분 전이 아니거나)에서는 여전히
+/// 안 묻는다. 그게 원래 막으려던 것이다.
+///
+/// 30초는 서버 캐시와 같은 주기다. 더 자주 불러도 같은 값이 온다.
+private struct BusArrivalTicker: ViewModifier {
+
+    let activity: HomecomingActivityManager
+    let coordinator: HomecomingCoordinator
+    @Binding var sawBusArrival: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: activity.currentAttributes?.sessionID) {
+                // **세션마다 처음부터 센다.** 지난 귀가에서 떴다는 이유로 이번
+                // 귀가의 첫 구간부터 묻기 시작하면 안 된다.
+                //
+                // 화면에 들어올 때 이미 떠 있을 수도 있다(잠금화면에서 앱으로
+                // 넘어온 경우). `onChange` 는 바뀔 때만 오므로 여기서 한 번 본다.
+                sawBusArrival = activity.currentState?.busArrivalNo != nil
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled else { return }
+                    guard activity.isRunning, sawBusArrival else { continue }
+                    await coordinator.refreshBusArrival()
+                }
+            }
+            .onChange(of: activity.currentState?.busArrivalNo) { _, no in
+                if no != nil { sawBusArrival = true }
+            }
+    }
+}
+
+extension View {
+    func busArrivalTicker(activity: HomecomingActivityManager,
+                          coordinator: HomecomingCoordinator,
+                          sawBusArrival: Binding<Bool>) -> some View {
+        modifier(BusArrivalTicker(activity: activity, coordinator: coordinator,
+                                  sawBusArrival: sawBusArrival))
     }
 }

@@ -142,7 +142,11 @@ struct HomecomingJourneyCard: View {
 ///
 /// 그래서 두 화면이 이 뷰 하나를 공유한다. 다른 것은 넘겨받는 값의 출처뿐이다 —
 /// 가족 쪽은 `WatchingStore.Entry`, 귀가자 쪽은 진행 중인 액티비티에서 꺼낸다.
-struct HomecomingJourneySection: View {
+struct HomecomingJourneySection: View, Identifiable {
+
+    /// 지도를 좌우로 넘길 때의 열쇠. 세션이 없으면(첫 출발 직후) 이름으로 버틴다 —
+    /// 같은 사람의 귀가가 동시에 둘일 수는 없다.
+    var id: String { sessionID ?? attributes.travelerName }
 
     let attributes: HomecomingAttributes
     let state: HomecomingAttributes.ContentState
@@ -160,31 +164,39 @@ struct HomecomingJourneySection: View {
 
     let routes: RouteGeometryStore
 
+    /// 지도만. `귀가` 탭의 `지도` 쪽이 이걸 쓴다.
+    ///
+    /// 좌표가 없으면 이 뷰가 스스로 아무것도 그리지 않는다.
+    var map: some View {
+        HomecomingJourneyMap(
+            travelerName: attributes.travelerName,
+            destinationName: attributes.destinationName,
+            state: state,
+            lastFixedAt: lastFixedAt,
+            sessionID: sessionID,
+            routes: routes)
+    }
+
+    /// 카드만. `귀가` 탭의 `카드` 쪽이 이걸 쓴다.
+    var card: some View {
+        HomecomingJourneyCard(
+            attributes: attributes, state: state, lastFixedAt: lastFixedAt,
+            onRefreshBusArrival: onRefreshBusArrival)
+    }
+
+    /// 둘을 위아래로. **지금은 아무도 안 쓴다** — `귀가` 탭이 상단에서
+    /// `지도 | 카드` 를 가르기 때문이다(2026-08-28).
+    ///
+    /// 남겨 두는 이유는 이 조합이 한 번 값을 증명했기 때문이다. 예전에는 카드가
+    /// 위였는데, 카드가 정류장 10개짜리 노선도로 450pt 를 먹어서 지도가 화면
+    /// 606pt 에서 시작했다. 화면이 874pt 니 지도의 268pt 만 보였고, 하필 귀가자
+    /// 마커는 영역의 가장자리라(`region()` 이 bbox × 1.25 다) 그 잘린 띠에
+    /// 들어갔다 — **지도를 열었는데 사람이 안 보였다**(2026-08-25). 그래서 순서를
+    /// 바꿨고, 이제는 가르는 것으로 그 문제를 아예 없앴다.
     var body: some View {
         VStack(spacing: 10) {
-            // **지도가 위다.** 예전에는 카드가 위였는데, 카드가 정류장 10개짜리
-            // 노선도 때문에 450pt 를 먹어서 지도가 화면 606pt 에서 시작했다.
-            // 화면이 874pt 니 스크롤하지 않으면 지도의 268pt 만 보였고, 하필
-            // 귀가자 마커는 영역의 가장자리라(`region()` 이 bbox × 1.25 다) 그
-            // 잘린 띠에 들어갔다 — 지도를 열었는데 사람이 안 보였다(2026-08-25).
-            //
-            // 카드를 줄이는 길도 있었지만 노선도는 다 보여야 한다. 그래서 순서를
-            // 바꿨다. 지도는 제목 바로 아래에서 시작해 통째로 들어오고, 카드는
-            // 스크롤해서 본다 — 카드가 답하는 "얼마나 남았나" 는 잠금화면과
-            // 아일랜드에도 있지만, "어디쯤인가" 는 이 지도에만 있다.
-            //
-            // 좌표가 없으면 이 뷰가 스스로 아무것도 그리지 않는다.
-            HomecomingJourneyMap(
-                travelerName: attributes.travelerName,
-                destinationName: attributes.destinationName,
-                state: state,
-                lastFixedAt: lastFixedAt,
-                sessionID: sessionID,
-                routes: routes)
-
-            HomecomingJourneyCard(
-                attributes: attributes, state: state, lastFixedAt: lastFixedAt,
-                onRefreshBusArrival: onRefreshBusArrival)
+            map
+            card
         }
     }
 }
