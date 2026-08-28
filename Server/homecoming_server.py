@@ -565,11 +565,27 @@ BUS_CTPV = ["41", "11"]
 BUS_OPR_YMD_CANDIDATES = ["20260601", "20260501", "20260401"]
 
 
+# **이 API 는 느리다. 15초는 실패를 보장하는 값이었다.**
+#
+# 실측(2026-08-28) — `getBusRoute`, `opr_ymd=20260601`, `numOfRows=1` 하나:
+#
+#     timeout=15  →  TimeoutError
+#     timeout=75  →  31.9초 만에 SUCCESS
+#
+# 그 탓에 캡처로 만든 경로의 999·163 구간이 `경유 정류장 0개` 로 폴백해 자동차
+# 경로로 그려졌다. 자료는 오는데 우리가 먼저 끊고 있었다.
+#
+# **그래도 이 길은 이제 폴백이다.** 늘려도 `bus_route_ids` 가 경기 노선표를 페이지
+# 다섯 개로 받으니 160초가 된다 — 앱이 못 기다린다. 서울·경기는
+# `_bus_leg_waypoints_from_route` 가 0.8초에 끝낸다.
+NEW_STYLE_TIMEOUT = 40
+
+
 def new_style_get(url, params):
     """신규 계열 공공데이터 호출. 실패하면 None."""
     query = urllib.parse.urlencode({"serviceKey": TAGO_KEY, **params})
     try:
-        with urllib.request.urlopen(f"{url}?{query}", timeout=15,
+        with urllib.request.urlopen(f"{url}?{query}", timeout=NEW_STYLE_TIMEOUT,
                                     context=outbound_tls()) as response:
             body = json.loads(response.read().decode("utf-8"))
     except Exception as error:                                  # noqa: BLE001
@@ -904,15 +920,97 @@ def stops_by_name(city, name):
     return result
 
 
-def bus_leg_waypoints(route_no, from_lat, from_lon, to_name, from_name=None):
+def bus_leg_waypoints(route_no, from_lat, from_lon, to_name, from_name=None,
+                      to_lat=None, to_lon=None, lists=None):
     """버스 한 구간이 지나는 정류장 좌표열 — 탄 자리 다음부터 내릴 자리 앞까지.
+
+    빈 배열은 실패가 아니라 "그릴 것이 없다" 다. 부르는 쪽은 그때 자동차 경로로
+    그린다.
+
+    **두 길이 있고 빠른 쪽을 먼저 본다.**
+
+    1. `route_stop_lists` — 경기는 GBIS 경유정류소, 서울은 TOPIS 도착정보.
+       정류장을 **좌표와 순번까지** 준다. 실측(2026-08-28) 999번 0.8초·163번 0.4초.
+    2. TAGO 신규 계열 + 이름별 좌표 조회. 다른 시도는 이 길밖에 없다.
+       **한 호출이 31.9초다**(실측) — 그래서 폴백이다.
+
+    2026-08-28 에 캡처로 만든 경로의 999 구간이 자동차 경로로 그려졌다. 로그는
+    `경유 정류장 0개` 였고, 원인은 자료가 없는 것이 아니라 2번 길이 느려 우리가
+    먼저 끊은 것이었다. 1번 길은 그때도 0.8초에 돌고 있었다.
+    """
+    points, missing = _bus_leg_waypoints_from_route(
+        route_no, from_lat, from_lon, to_name, to_lat, to_lon, lists)
+    if points or missing:
+        return points, missing
+    if lists is not None:
+        # 시험이 목록을 직접 준 경우. 망으로 안 나간다.
+        if not lists:
+            return _bus_leg_waypoints_tago(route_no, from_lat, from_lon,
+                                           to_name, from_name)
+        return [], []
+    return _bus_leg_waypoints_tago(route_no, from_lat, from_lon, to_name, from_name)
+
+
+def _bus_leg_waypoints_from_route(route_no, from_lat, from_lon, to_name,
+                                  to_lat=None, to_lon=None, lists=None):
+    """노선 정류장 목록에서 구간의 경유 좌표. 못 집으면 `([], [])`.
+
+    **좌표로 집는다.** 캡처가 준 승·하차 좌표는 기둥 그 자체라 0m 로 맞는다.
+    이름으로는 못 가른다 — `위시티1.3단지` 가 길 양쪽에 있고 둘 다 승차보다 뒤
+    순번이다(2026-08-27 실측: 20796 seq 21 이 5.0m, 20795 seq 70 이 32.8m).
+
+    같은 번호가 여러 지역에 있어(999 는 고양과 수원) 목록이 여러 개 온다. **승차와
+    하차가 다 들어 있고 순서가 맞는 목록**만 쓰고, 그중 두 끝이 가장 가까운 것을
+    고른다.
+
+    승차 기둥이 목록에 두 번 나올 수 있다(순환·왕복). 가까운 것부터 차례로
+    시도해 하차가 뒤에 오는 첫 짝을 쓴다.
+    """
+    if from_lat is None or from_lon is None:
+        return [], []
+
+    best = None
+    for stops in (lists if lists is not None else route_stop_lists(route_no)):
+        if not stops:
+            continue
+        starts = sorted(
+            (haversine(from_lat, from_lon, s["lat"], s["lon"]), i)
+            for i, s in enumerate(stops))
+        for gap, start in starts:
+            if gap > LEG_STOP_SNAP_METERS:
+                break
+            after = stops[start + 1:]
+            if not after:
+                continue
+            if to_lat is not None and to_lon is not None:
+                to_gap, offset = min(
+                    (haversine(to_lat, to_lon, s["lat"], s["lon"]), i)
+                    for i, s in enumerate(after))
+                if to_gap > LEG_STOP_SNAP_METERS:
+                    continue
+            else:
+                # 좌표를 안 받는 길(옛 앱)에는 이름뿐이다.
+                offset = next((i for i, s in enumerate(after)
+                               if n_eq(s["name"], to_name)), None)
+                if offset is None:
+                    continue
+                to_gap = 0.0
+            score = gap + to_gap
+            if best is None or score < best[0]:
+                best = (score, after[:offset])
+            break
+
+    if best is None:
+        return [], []
+    return [[round(s["lat"], 5), round(s["lon"], 5)] for s in best[1]], []
+
+
+def _bus_leg_waypoints_tago(route_no, from_lat, from_lon, to_name, from_name=None):
+    """예전 길 — TAGO 신규 계열 노선 정류장 이름 + 이름별 좌표 조회.
 
     같은 이름이 길 양쪽에 있다(`풍산역` 은 다섯 곳이다). **직전 정류장에서 가장
     가까운 후보를 고른다** — 순서가 있으니 이어지는 쪽이 그 방향이다. 순환 노선의
     상행·하행도 이걸로 갈린다.
-
-    빈 배열은 실패가 아니라 "그릴 것이 없다" 다. 부르는 쪽은 그때 자동차 경로로
-    그린다 — 그게 지금까지의 동작이다.
     """
     here = nearby_stops(from_lat, from_lon, 20)
     if not here:
@@ -3967,8 +4065,11 @@ class Handler(BaseHTTPRequestHandler):
 
             points, missing = [], []
             if from_lat is not None:
+                # **하차 좌표도 넘긴다.** 노선 목록에서 집을 때 이름으로는 길 양쪽을
+                # 못 가른다 — 캡처가 준 기둥 좌표가 그것을 가른다.
                 points, missing = bus_leg_waypoints(route_no, from_lat, from_lon,
-                                                    to_name, from_name)
+                                                    to_name, from_name,
+                                                    to_lat=to_lat, to_lon=to_lon)
             picked = leg_stops(route_no, from_name, to_name)
             # **좌표가 오면 그것이 답이다.** 이름만으로는 길 양쪽 기둥을 못 가른다 —
             # `위시티1.3단지` 가 5.0m 와 32.8m 로 둘 나왔고 둘 다 방향 조건을
