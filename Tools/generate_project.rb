@@ -84,6 +84,12 @@ assets_ref = app_group.new_reference(File.join(ROOT, 'App', 'Assets.xcassets'))
 app_group.new_reference(File.join(ROOT, 'App', 'Homecoming.entitlements'))
 widget_group.new_reference(File.join(ROOT, 'Widget', 'Info.plist'))
 
+# 개인정보 매니페스트. **리소스로 넣어야 번들에 들어간다** — 파일만 만들어 두면
+# 심사에서 없는 것과 같다. 타깃마다 하나씩이다(앱은 수집을 신고하고, 위젯은
+# `Shared/` 가 쓰는 `UserDefaults` 만 신고한다).
+app_privacy_ref = app_group.new_reference(File.join(ROOT, 'App', 'PrivacyInfo.xcprivacy'))
+widget_privacy_ref = widget_group.new_reference(File.join(ROOT, 'Widget', 'PrivacyInfo.xcprivacy'))
+
 # --- 공통 빌드 설정 ----------------------------------------------------------
 
 COMMON = {
@@ -132,6 +138,7 @@ app.build_configurations.each do |config|
 end
 app.add_file_references(shared_refs + app_refs)
 app.resources_build_phase.add_file_reference(assets_ref)
+app.resources_build_phase.add_file_reference(app_privacy_ref)
 
 # --- 위젯 익스텐션 타겟 -------------------------------------------------------
 
@@ -148,6 +155,7 @@ widget.build_configurations.each do |config|
 end
 # 위젯도 Attributes 정의가 필요하므로 Shared 를 양쪽 타겟에 넣는다.
 widget.add_file_references(shared_refs + widget_refs)
+widget.resources_build_phase.add_file_reference(widget_privacy_ref)
 
 # 익스텐션은 SwiftUI/WidgetKit/ActivityKit 을 명시적으로 링크한다.
 %w[SwiftUI.framework WidgetKit.framework ActivityKit.framework].each do |name|

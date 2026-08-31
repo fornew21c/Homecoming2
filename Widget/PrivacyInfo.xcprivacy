@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  위젯 익스텐션의 개인정보 매니페스트.
+
+  **위젯은 스스로 아무것도 모으지 않는다.** 서버가 보낸 값을 그리기만 한다.
+  그래서 `NSPrivacyCollectedDataTypes` 가 비어 있다 — 수집은 앱이 하고
+  `App/PrivacyInfo.xcprivacy` 에 신고돼 있다.
+
+  다만 `Shared/HomecomingCheckIn.swift` 가 이 타깃에도 컴파일되고 그 안에서
+  `UserDefaults` 를 쓰므로, 필수 사유 API 는 여기도 적는다.
+  (`generate_project.rb` 가 `Shared/` 를 양쪽 타깃에 넣는다.)
+-->
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

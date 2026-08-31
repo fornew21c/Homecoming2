@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  개인정보 매니페스트. App Store 심사에 필요하다.
+
+  **여기 적는 것은 코드에서 확인한 것뿐이다.** 짐작으로 적으면 거짓 신고가 되고,
+  빠뜨리면 심사에서 막힌다. 아래 각 항목의 근거를 주석에 남긴다.
+
+  이 앱은 **추적을 안 한다.** 광고 SDK 도, IDFA 도, 제3자 분석도 없다
+  (`AdSupport`·`AppTrackingTransparency` 가 저장소에 한 건도 없다).
+-->
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <!--
+          정확한 위치.
+
+          귀가 중에만 모은다. 서버가 남은거리·도착예정을 재고 가족 기기에 보낸다
+          (`sessions.last_lat/last_lon`, `fixes`). 세션이 끝나면 위치 기록을
+          지운다 — 실측 로그에 `위치 기록 20건 삭제` 로 남는다.
+
+          계정에 묶인다(`linked = true`) — 어느 기기의 귀가인지 알아야 가족에게
+          보낼 수 있다. 추적에는 안 쓴다.
+        -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePreciseLocation</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!--
+          이름.
+
+          사용자가 정하는 **가족에게 보이는 이름**이다(`설정` 탭, 기본값 `아빠`).
+          서버가 `sessions.traveler_name` 으로 들고 있다가 가족 화면과 알림 문구에
+          쓴다("아빠가 집에 도착했어요"). 실명일 필요가 없지만 실명일 수 있으므로
+          이름으로 신고한다.
+        -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeName</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!--
+          기기 ID.
+
+          APNs 토큰이다(`accounts.device_token`·`start_token`, `activities.token`).
+          잠금화면 알림을 그 기기로 보내는 데만 쓴다. 광고 식별자는 안 쓴다.
+        -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeDeviceID</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+    </array>
+
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!--
+          `UserDefaults`.
+
+          쓰는 자리 — 가족에게 보이는 이름(`homecoming.travelerName`), 안전귀가
+          모드 켬/끔, 마지막 안심 확인 시각(`homecoming.lastCheckIn`).
+
+          사유 `CA92.1` = **이 앱 안에서만** 읽고 쓴다. 앱 그룹을 안 쓴다 —
+          `HomecomingCheckIn` 주석이 그 이유를 적어 뒀다(`LiveActivityIntent` 가
+          앱 프로세스에서 돌아서 앱 그룹 없이도 같은 UserDefaults 를 본다).
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
