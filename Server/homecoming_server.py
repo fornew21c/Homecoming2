@@ -3395,8 +3395,13 @@ def refresh_leg_arrivals(leg):
         _arrival_rows.pop(arrival_stop(lat, lon, now=now()) or (), None)
         value = bus_arrival(lat, lon, number)
         _arrival_ready[(number, lat, lon)] = (now(), value)
+        # **그다음 차도 적는다.** 칩이 그 값으로 줄을 하나 더 그리므로, 안 적으면
+        # 나중에 "그때 칩이 몇 줄이었나" 를 로그로 답할 수 없다. 2026-08-28
+        # 실귀가에서 실제로 못 답했다 — 아일랜드가 세 줄이었는지 네 줄이었는지.
         log(f"  버스 {number} 도착 새로고침 → "
-            f"{iso(value['at']) if value else '없음'}")
+            f"{iso(value['at']) if value else '없음'}"
+            + (f" · 그다음 {iso(value['thenAt'])}"
+               if value and value.get("thenAt") else ""))
 
 
 def merge_arrivals(values):
