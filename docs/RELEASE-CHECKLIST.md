@@ -22,8 +22,39 @@ Railway 에 `HOMECOMING_APNS_ENV=production` 을 넣는다.
 **놓치면 알림이 한 건도 안 간다.** App Store 로 받은 앱은 production APNs 를 쓰는데
 서버가 sandbox 로 쏘면 전부 실패한다. 이 앱의 전부가 그 알림이다.
 
-> 전환하는 순간 이미 떠 있던 액티비티는 갱신이 끊긴다(토큰이 환경별로 다르다).
-> 한 번 껐다 켜면 풀린다. 배포 시점만 고르면 되는 일이다.
+#### 그런데 「환경변수 하나」가 아니다 — 토큰이 지워진다
+
+APNs 토큰은 **환경별로 다르다.** 지금 폰에 깔린 개발 빌드의 토큰은 sandbox 것이라
+production 으로 쏘면 `BadDeviceToken` 이 온다. 그리고 서버가 그것을 **죽은 토큰으로
+보고 지운다.**
+
+```python
+if "410" in output or "BadDeviceToken" in output:
+    db().execute("DELETE FROM activities WHERE token = ?", (token,))
+    db().execute("UPDATE accounts SET start_token = NULL WHERE start_token = ?", (token,))
+    log("  죽은 토큰 폐기")
+```
+
+**되돌릴 수 없다.** sandbox 로 되돌려도 토큰이 이미 없어서 폰이 다시 등록해야 한다.
+
+그러니 **미리 켜면 안 된다.** TestFlight 빌드로 갈아탈 때 같이 하는 일이다.
+
+#### 더 나은 길 — 한 서버가 둘을 다 받는다
+
+`BadDeviceToken` 이면 **지우기 전에 다른 호스트로 한 번 더 쏜다.**
+
+```
+production 으로 쏜다
+  BadDeviceToken 이면 → sandbox 로 한 번 더
+    그것도 실패해야 진짜 죽은 토큰
+  성공한 환경을 그 토큰에 기억해 다음부터 바로 그쪽으로
+```
+
+그러면 **개발 빌드와 TestFlight 빌드가 같은 서버를 동시에 쓴다.** 갈아타는 순간의
+끊김이 없고, 실기기로 개발하면서 가족은 TestFlight 로 쓰는 것도 된다. 대가는 환경이
+틀린 첫 요청에 왕복이 한 번 더 나가는 것뿐이다.
+
+**이걸 만들면 A1 이 아예 사라진다.**
 
 ### A2. 안전귀가가 절반이다 — 결정이 필요하다 ⬜
 
