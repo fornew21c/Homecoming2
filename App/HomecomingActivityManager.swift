@@ -36,6 +36,10 @@ final class HomecomingActivityManager {
     /// `currentState` 를 채우는 구독. `activity` 가 새로 잡힐 때마다 다시 건다.
     private var contentObservation: Task<Void, Never>?
 
+    /// 액티비티가 **끝나는 것**을 지켜보는 구독. `contentUpdates` 는 내용이 바뀔
+    /// 때만 오므로 종료는 이쪽으로만 알 수 있다.
+    private var lifetimeObservation: Task<Void, Never>?
+
     /// 갱신을 서버가 밀어 줄지 여부.
     ///
     /// `.token` 으로 시작하면 액티비티마다 갱신 토큰이 발급되고,
@@ -54,6 +58,21 @@ final class HomecomingActivityManager {
     }
 
     var isRunning: Bool { activity != nil }
+
+    /// 도착 카드를 남겨 두는 시간. **서버의 `ARRIVED_LINGER_SECONDS` 와 같아야 한다** —
+    /// 그 상수의 주석이 이 이름을 지목하고 있는데 앱에는 없었다.
+    ///
+    /// 서버는 도착 뒤 이만큼 기다렸다 `end` 를 쏜다. 그때 잠금화면과 아일랜드가
+    /// 사라진다. 앱 카드도 같이 사라져야 "한 화면이 두 말을 하지 않는다".
+    static let arrivedLingerSeconds: TimeInterval = 300
+
+    /// 도착 뒤 `activity` 를 스스로 놓는 안전망.
+    ///
+    /// 정상 경로는 `end` 가 오면 `activityStateUpdates` 가 알려 주는 것이다. 그런데
+    /// 서버가 죽었거나 그 순간 신호를 못 받으면 `end` 가 영영 안 온다 — 그러면
+    /// `activity` 가 안 비워지고 `귀가 시작` 이 계속 막힌다. 그건 카드가 일찍
+    /// 사라지는 것보다 나쁘다.
+    private var lingerTask: Task<Void, Never>?
 
     // MARK: - 시작
 
@@ -152,11 +171,34 @@ final class HomecomingActivityManager {
                 self?.currentState = content.state
             }
         }
+        observeLifetime(of: activity)
+    }
+
+    /// **끝나는 것을 지켜본다.** 이게 없으면 도착 뒤 참조를 계속 들고 있게 되고,
+    /// 서버가 5분 뒤 `end` 를 쏴도 앱은 모른 채 `귀가 시작` 을 막고 있는다.
+    ///
+    /// `contentUpdates` 는 **내용이 바뀔 때만** 온다 — 끝나는 것은 안 알려 준다.
+    /// 그래서 스트림이 하나 더 필요하다. `WatchingStore` 와 `HomecomingPushRegistrar`
+    /// 가 이미 같은 것을 쓰고 있다.
+    private func observeLifetime(of activity: Activity<HomecomingAttributes>) {
+        lifetimeObservation?.cancel()
+        lifetimeObservation = Task { [weak self] in
+            for await state in activity.activityStateUpdates {
+                guard !Task.isCancelled else { return }
+                guard state == .ended || state == .dismissed else { continue }
+                HomecomingLog.activity.notice(
+                    "액티비티 종료 감지 (\(String(describing: state), privacy: .public)) — 참조를 놓는다")
+                self?.release()
+                return
+            }
+        }
     }
 
     private func stopObservingContent() {
         contentObservation?.cancel()
         contentObservation = nil
+        lifetimeObservation?.cancel()
+        lifetimeObservation = nil
         currentState = nil
     }
 
@@ -421,7 +463,41 @@ final class HomecomingActivityManager {
         )
         HomecomingLog.activity.notice("도착 상태 표시 — 끝내는 것은 서버에 맡긴다")
 
-        self.activity = nil
+        // **`activity` 를 여기서 비우지 않는다.**
+        //
+        // 예전에는 비웠다. 그건 액티비티를 끝내는 것이 아니라 **앱이 참조를 놓는
+        // 것**뿐인데(끝내는 건 `end` 다), 앱 카드가 그 참조를 보고 그린다
+        // (`isRunning`). 그래서 잠금화면과 아일랜드에는 도착 카드가 5분 남는데
+        // **앱 카드만 0초에 사라졌다.** 한 화면이 두 말을 한 셈이다.
+        //
+        // 이제는 실제로 끝날 때까지 들고 있는다. 끝나는 것은 아래 두 길로 안다.
+        //   · 서버의 `end` → `activityStateUpdates` (정상)
+        //   · `arrivedLingerSeconds` 뒤 스스로 놓기 (안전망)
+        //
+        // 그동안 `귀가 시작` 은 막혀 있다. 도착하자마자 새 귀가를 시작하는 일은
+        // 없다고 보고 그대로 뒀다 — 가르려면 `isRunning` 을 둘로 쪼개야 하는데
+        // 얻는 것보다 만지는 데가 많다.
+        startLinger()
+    }
+
+    /// 도착 뒤 정해진 시간이 지나면 `activity` 를 놓는다. `end` 가 먼저 오면 그쪽이 이긴다.
+    private func startLinger() {
+        lingerTask?.cancel()
+        lingerTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.arrivedLingerSeconds))
+            guard !Task.isCancelled, let self else { return }
+            guard self.activity != nil else { return }
+            HomecomingLog.activity.notice("도착 카드 시간 만료 — 참조를 놓는다")
+            self.release()
+        }
+    }
+
+    /// 액티비티 참조를 놓는다. **끝내는 것이 아니다** — 이미 끝났거나 남겨 둔 것을
+    /// 앱이 더 이상 안 들고 있겠다는 뜻이다.
+    private func release() {
+        lingerTask?.cancel()
+        lingerTask = nil
+        activity = nil
         stopObservingContent()
     }
 
@@ -489,7 +565,17 @@ final class HomecomingActivityManager {
         // 카드가 잠금화면에 계속 남는다 — 다음 귀가와 겹쳐 보이기까지 한다.
         //
         // 앱이 켜지는 순간이 그걸 알아챌 수 있는 자리다.
-        let orphans = all.filter { $0.content.state.endReason != nil }
+        // **방금 도착한 것은 유령이 아니다.** 서버가 `arrivedLingerSeconds` 동안
+        // 일부러 살려 두는 중이다. 여기서 같이 치우면 5분 안에 앱을 껐다 켠 것만으로
+        // 잠금화면의 도착 카드가 사라진다 — 앱이 서버의 5분을 잘라 먹는 셈이다.
+        //
+        // `measuredAt` 이 도착을 판정한 시각이다. 그보다 오래된 것만 유령으로 본다.
+        let now = Date()
+        let orphans = all.filter { item in
+            guard item.content.state.endReason != nil else { return false }
+            guard let at = item.content.state.measuredAt else { return true }
+            return now.timeIntervalSince(at) >= Self.arrivedLingerSeconds
+        }
         guard !orphans.isEmpty else { return }
         Task {
             for item in orphans {
